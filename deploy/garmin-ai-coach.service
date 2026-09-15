@@ -1,0 +1,23 @@
+[Unit]
+Description=Garmin AI Performance Coach - Telegram Bot 24/7
+Documentation=https://github.com/rickycento03/garmin-ai-coach-bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Utente dedicato non-root (creato da install_service.sh)
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/opt/garmin-ai-coach-bot
+# Avvio con il python del venv dedicato
+ExecStart=/opt/garmin-ai-coach-bot/venv/bin/python /opt/garmin-ai-coach-bot/src/telegram_bot.py
+Restart=always
+RestartSec=10
+# Log strutturati su journald
+StandardOutput=journal
+StandardError=journal
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target

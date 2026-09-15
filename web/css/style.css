@@ -1,0 +1,1008 @@
+/* =============================================================================
+   MyPTAI PWA - tema scuro, mobile-first
+   ============================================================================= */
+:root {
+  /* Master Ibrido V33 · Glassmorphism dark */
+  --bg: #0d1420;            /* Onyx black */
+  --bg-soft: #141d2f;
+  --card: #131b2e;          /* Navy card */
+  --card-2: #1a2440;
+  --border: rgba(148, 163, 184, 0.16);
+  --text: #e6eaf2;
+  --text-dim: #8b95a7;
+  --accent: #4f8cff;
+  --green: #22c55e;
+  --amber: #f59e0b;
+  --red: #ef4444;
+  --glass: rgba(19, 27, 46, 0.62);
+  --glass-border: rgba(255, 255, 255, 0.09);
+  --neon-glow: 0 0 24px rgba(79, 140, 255, 0.14), 0 8px 32px rgba(0, 0, 0, 0.35);
+  --radius: 16px;
+  --nav-h: 64px;
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+
+html, body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  font-size: 15px;
+  line-height: 1.45;
+  min-height: 100vh;
+  overscroll-behavior-y: none;
+}
+
+body { padding-bottom: calc(var(--nav-h) + var(--safe-bottom) + 40px); }
+
+/* ---------- header ---------- */
+.app-header {
+  position: sticky; top: 0; z-index: 20;
+  display: flex; align-items: center; justify-content: space-between;
+  padding: calc(12px + var(--safe-top)) 16px calc(10px + var(--safe-bottom) * 0.3);
+  background: rgba(13, 20, 32, 0.72);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border-bottom: 1px solid var(--glass-border);
+}
+.header-brand { display: flex; align-items: center; gap: 10px; }
+.user-display-name {
+  font-size: 11px; color: var(--text-dim); letter-spacing: .2px;
+  max-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+/* Logo ufficiale MyPTAI (SVG neon) nell'header navbar: altezza fissa, larghezza auto */
+.brand-logo-img {
+  height: 27px; width: auto; flex-shrink: 0;
+  border-radius: 8px;
+  filter: drop-shadow(0 0 10px rgba(34, 197, 94, 0.35));
+  animation: logoGlow 2.6s ease-in-out infinite;
+}
+@keyframes logoGlow {
+  0%, 100% { filter: drop-shadow(0 0 8px rgba(34, 197, 94, 0.28)); }
+  50% { filter: drop-shadow(0 0 16px rgba(0, 210, 255, 0.5)); }
+}
+/* Logo testuale "M PT AI" con linea pulse neon nella gamba centrale della M */
+.brand-logo-text {
+  display: inline-flex; align-items: baseline;
+  font-weight: 900; letter-spacing: .5px; font-size: 21px;
+  color: var(--text); text-shadow: 0 0 18px rgba(79, 140, 255, 0.35);
+}
+.logo-m {
+  position: relative; display: inline-block;
+  font-size: 26px; line-height: 1;
+  background: linear-gradient(180deg, #38bdf8 20%, #4f8cff 60%, #a78bfa 100%);
+  -webkit-background-clip: text; background-clip: text; color: transparent;
+}
+/* linea pulse: gamba centrale della M (barra verticale 2px) */
+.logo-pulse {
+  position: absolute; left: 50%; top: 10%; bottom: 8%; width: 2.5px;
+  transform: translateX(-50%); border-radius: 99px;
+  background: linear-gradient(180deg, #7dd3fc, #38bdf8);
+  box-shadow: 0 0 10px #38bdf8, 0 0 22px #38bdf8;
+  animation: logoPulse 2s ease-in-out infinite;
+}
+@keyframes logoPulse {
+  0%, 100% { opacity: .55; box-shadow: 0 0 6px #38bdf8, 0 0 14px #38bdf8; }
+  50% { opacity: 1; box-shadow: 0 0 12px #38bdf8, 0 0 30px #38bdf8; }
+}
+.logo-rest { font-size: 21px; color: #e6eaf2; }
+/* Badge GARMIN CONNECTED (verde neon) — cliccabile (apre Gestione Account) */
+.garmin-badge {
+  display: inline-flex; align-items: center; gap: 7px;
+  font-size: 10.5px; font-weight: 800; letter-spacing: 1.1px;
+  color: #4ade80;
+  background: rgba(34, 197, 94, 0.10);
+  border: 1px solid rgba(34, 197, 94, 0.45);
+  border-radius: 999px; padding: 5px 11px;
+  box-shadow: 0 0 14px rgba(34, 197, 94, 0.25), inset 0 0 10px rgba(34, 197, 94, 0.08);
+  cursor: pointer;
+  transition: transform .15s ease, box-shadow .15s ease, background .15s ease;
+  user-select: none;
+}
+.garmin-badge:hover, .garmin-badge:focus-visible {
+  transform: translateY(-1px);
+  background: rgba(34, 197, 94, 0.18);
+  box-shadow: 0 0 20px rgba(34, 197, 94, 0.45), inset 0 0 12px rgba(34, 197, 94, 0.12);
+  outline: none;
+}
+.garmin-badge:active { transform: translateY(0); }
+.garmin-dot {
+  width: 7px; height: 7px; border-radius: 50%; background: #22c55e;
+  box-shadow: 0 0 8px #22c55e, 0 0 16px #22c55e;
+  animation: dotPulse 1.6s ease-in-out infinite;
+}
+@keyframes dotPulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: .45; transform: scale(.72); }
+}
+
+.pill {
+  font-size: 12px; font-weight: 700; padding: 5px 12px; border-radius: 999px;
+  border: 1px solid var(--border);
+}
+.pill-green { background: rgba(34,197,94,.15); color: var(--green); border-color: rgba(34,197,94,.4); }
+.pill-amber { background: rgba(245,158,11,.15); color: var(--amber); border-color: rgba(245,158,11,.4); }
+.pill-red   { background: rgba(239,68,68,.15);  color: var(--red);   border-color: rgba(239,68,68,.4); }
+.pill-neutral { color: var(--text-dim); }
+
+/* ---------- main / tabs ---------- */
+main { max-width: 560px; margin: 0 auto; padding: 16px 14px; }
+/* Buffer inferiore: il footer fluido (position: relative) e la nav fissa non
+   devono sovrapporsi alle card biometriche (griglia, allenamento, ecc.). */
+.app-container, main, .dashboard-view { padding-bottom: 110px !important; }
+.tab { display: none; animation: fadeIn .25s ease; }
+.tab.active { display: block; }
+@keyframes fadeIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+
+.card {
+  background: var(--glass);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius);
+  box-shadow: var(--neon-glow), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  padding: 16px;
+  margin-bottom: 14px;
+}
+/* ---------- Sezione Allenamenti: stile unificato al tema Readiness ----------
+   (sfondo #131b2e + blur 16px, bordo blu neon, glow 0 0 24px) */
+#tab-workout .card {
+  background: #131b2e;
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid rgba(79, 140, 255, 0.18);
+  box-shadow: 0 0 24px rgba(79, 140, 255, 0.14);
+}
+/* ---------- Sezione Allenamento: 4 Step sequenziali ---------- */
+.step-head { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; }
+.step-head h2 { margin: 0; font-size: 17px; }
+.step-num {
+  flex: 0 0 auto; width: 28px; height: 28px; border-radius: 50%;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: linear-gradient(135deg, #00d2ff, #0099cc);
+  color: #04121f; font-weight: 900; font-size: 14px;
+  box-shadow: 0 0 16px rgba(0, 210, 255, 0.55), 0 4px 14px rgba(0, 210, 255, 0.35);
+}
+.step-card { scroll-margin-top: 12px; }
+.card h2 { font-size: 16px; margin-bottom: 10px; }
+.card h3 { font-size: 14px; margin-bottom: 8px; color: var(--text-dim); }
+
+.hidden { display: none !important; }
+.hint { font-size: 12px; color: var(--text-dim); margin: 6px 0; }
+
+/* ---------- buttons ---------- */
+.btn {
+  border: none; border-radius: 12px; padding: 12px 16px;
+  font-size: 14px; font-weight: 600; cursor: pointer;
+  color: var(--text); background: var(--card-2);
+  transition: filter .15s, transform .05s;
+  display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+}
+.btn:active { transform: scale(.97); }
+.btn:disabled { opacity: .5; cursor: not-allowed; }
+.btn-block { width: 100%; margin-top: 10px; }
+.btn-primary { background: var(--accent); color: #fff; }
+.btn-warn { background: var(--amber); color: #111; }
+.btn-danger { background: var(--red); color: #fff; }
+.btn-ghost { background: transparent; border: 1px solid var(--border); color: var(--text-dim); }
+.spin {
+  display: inline-block; width: 14px; height: 14px; border-radius: 50%;
+  border: 2px solid rgba(255,255,255,.3); border-top-color: #fff;
+  animation: rot .7s linear infinite;
+}
+@keyframes rot { to { transform: rotate(360deg); } }
+
+/* ---------- readiness gauge · anello 3D ---------- */
+.readiness-card { display: flex; flex-direction: column; align-items: center; padding: 6px 0 4px; }
+.gauge-wrap { position: relative; }
+.ring-3d .gauge-wrap {
+  filter: drop-shadow(0 10px 22px rgba(0, 0, 0, 0.45)) drop-shadow(0 0 18px rgba(79, 140, 255, 0.12));
+}
+.gauge-track { fill: none; stroke: rgba(148, 163, 184, 0.14); stroke-width: 14; }
+.gauge-track-soft { fill: none; stroke: rgba(148, 163, 184, 0.05); stroke-width: 6; }
+.gauge-arc {
+  fill: none; stroke-width: 14; stroke-linecap: round;
+  transform: rotate(-90deg); transform-origin: 100px 100px;
+  transition: stroke-dasharray .8s cubic-bezier(.4,0,.2,1);
+}
+/* Anello Readiness: overlay interno in Flexbox colonna perfettamente centrato
+   sull'SVG (label / score / verdict staccati e senza sovrapposizioni). */
+.readiness-ring-inner {
+  position: absolute; inset: 0;
+  display: flex; flex-direction: column;
+  align-items: center; justify-content: center;
+  gap: 4px; height: 100%;
+  pointer-events: none;
+  z-index: 2;
+}
+.readiness-ring-label,
+.readiness-ring-score,
+.readiness-ring-verdict {
+  line-height: 1; margin: 0; padding: 0;
+  text-align: center; white-space: nowrap;
+}
+.readiness-ring-label {
+  font-size: 10.5px; font-weight: 800; letter-spacing: 3px;
+  color: var(--text-dim);
+}
+.readiness-ring-score {
+  font-size: 52px; font-weight: 900; color: #fff;
+  text-shadow: 0 0 24px rgba(34, 197, 94, 0.4);
+}
+.readiness-ring-verdict {
+  font-size: 14px; font-weight: 800; letter-spacing: 1px;
+}
+.readiness-meta { display: flex; gap: 14px; margin-top: 12px; font-size: 12.5px; color: var(--text-dim); }
+.readiness-meta b { color: var(--text); display: block; font-size: 15px; }
+
+/* ---------- griglia 7 componenti + Medie 7 Notti ---------- */
+.metrics-head { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 12px; }
+.metrics-head h2 { font-size: 16px; margin: 0; }
+.metrics-date { font-size: 11px; color: var(--text-dim); text-transform: uppercase; letter-spacing: .6px; }
+.metrics-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.metric-tile {
+  position: relative; border-radius: 14px; padding: 11px 12px;
+  background: linear-gradient(160deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.015));
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  box-shadow: inset 0 0 18px rgba(255, 255, 255, 0.02);
+}
+.mt-icon { font-size: 17px; }
+.mt-name { font-size: 10.5px; color: var(--text-dim); text-transform: uppercase; letter-spacing: .4px; margin: 2px 0 1px; }
+.mt-value { font-size: 16.5px; font-weight: 800; color: #fff; }
+.metric-bar { height: 5px; border-radius: 99px; background: rgba(255, 255, 255, 0.07); overflow: hidden; margin-top: 7px; }
+.metric-bar i { display: block; height: 100%; border-radius: 99px; transition: width .6s; }
+/* quadratino unico Medie 7 Notti */
+.medie-tile {
+  display: flex; flex-direction: column; justify-content: center; gap: 5px;
+  background: linear-gradient(160deg, rgba(79, 140, 255, 0.13), rgba(167, 139, 250, 0.06));
+  border-color: rgba(79, 140, 255, 0.35);
+  box-shadow: 0 0 18px rgba(79, 140, 255, 0.12), inset 0 0 20px rgba(79, 140, 255, 0.05);
+}
+.medie-title { font-size: 11px; font-weight: 800; color: #93c5fd; letter-spacing: .4px; margin-bottom: 2px; }
+.medie-row { display: flex; justify-content: space-between; align-items: baseline; gap: 6px; font-size: 11px; }
+.medie-row span { color: var(--text-dim); }
+.medie-row b { color: #fff; font-size: 12.5px; }
+
+/* ---------- card allenamento del giorno + SYNC verde neon ---------- */
+.workout-day-head { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 8px; }
+.workout-day-head h2 { font-size: 16px; margin: 0; }
+.workout-day-name { font-size: 15.5px; font-weight: 800; color: #fff; }
+.workout-day-stats {
+  display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px;
+  margin: 12px 0 4px;
+}
+.wds-item {
+  text-align: center; border-radius: 12px; padding: 9px 4px;
+  background: rgba(255, 255, 255, 0.04); border: 1px solid rgba(255, 255, 255, 0.07);
+}
+.wds-item span { display: block; font-size: 9.5px; color: var(--text-dim); text-transform: uppercase; letter-spacing: .5px; }
+.wds-item b { display: block; font-size: 17px; font-weight: 900; color: #fff; margin: 2px 0 1px; }
+.wds-item small { font-size: 9.5px; color: var(--text-dim); }
+.btn-sync-neon {
+  margin-top: 12px;
+  background: linear-gradient(135deg, #16a34a, #22c55e);
+  color: #04120a; font-weight: 900; letter-spacing: .6px;
+  border: 1px solid rgba(74, 222, 128, 0.6);
+  box-shadow: 0 0 22px rgba(34, 197, 94, 0.45), 0 4px 16px rgba(34, 197, 94, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.35);
+  text-shadow: 0 0 12px rgba(255, 255, 255, 0.4);
+}
+.btn-sync-neon:active { box-shadow: 0 0 10px rgba(34, 197, 94, 0.35); }
+
+.comp-row { display: flex; align-items: center; gap: 10px; margin: 9px 0; font-size: 13px; }
+.comp-row .comp-name { width: 124px; color: var(--text-dim); flex-shrink: 0; font-size: 11px; line-height: 1.25; }
+.comp-bar { flex: 1; height: 8px; border-radius: 99px; background: var(--bg-soft); overflow: hidden; }
+.comp-bar i { display: block; height: 100%; border-radius: 99px; background: var(--accent); transition: width .6s; }
+.comp-row .comp-val { width: 38px; text-align: right; font-weight: 700; }
+
+.meta-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+.meta-cell { background: var(--bg-soft); border-radius: 12px; padding: 10px 8px; text-align: center; }
+.meta-cell .v { font-size: 15px; font-weight: 700; }
+.meta-cell .k { font-size: 10.5px; color: var(--text-dim); text-transform: uppercase; letter-spacing: .4px; }
+
+.act-row {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 9px 0; border-bottom: 1px dashed var(--border); font-size: 13px;
+}
+.act-row:last-child { border-bottom: none; }
+.act-row .tag {
+  font-size: 10px; padding: 2px 8px; border-radius: 99px; background: var(--card-2);
+  color: var(--accent); font-weight: 700;
+}
+/* tag globale (badge tipo allenamento / card home) */
+.tag {
+  font-size: 10.5px; padding: 3px 10px; border-radius: 999px;
+  background: rgba(79, 140, 255, 0.12); color: #93c5fd;
+  border: 1px solid rgba(79, 140, 255, 0.35); font-weight: 700;
+  white-space: nowrap;
+}
+
+/* ---------- workout ---------- */
+textarea, input[type="text"], input[type="number"] {
+  width: 100%; background: var(--bg-soft); color: var(--text);
+  border: 1px solid var(--border); border-radius: 12px;
+  padding: 11px 12px; font-size: 14px; font-family: inherit;
+}
+textarea { resize: vertical; }
+textarea:focus, input:focus { outline: none; border-color: var(--accent); }
+.toggle-row { display: flex; align-items: center; gap: 9px; margin-top: 10px; font-size: 13px; color: var(--text-dim); cursor: pointer; }
+.toggle-row input { width: 17px; height: 17px; accent-color: var(--amber); }
+
+.workout-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+.workout-head h3 { font-size: 15px; color: var(--text); margin: 0; }
+.phase { border-left: 3px solid var(--accent); padding: 8px 10px; margin: 8px 0; background: var(--bg-soft); border-radius: 0 10px 10px 0; font-size: 13px; }
+.phase .p-tag { font-weight: 700; color: var(--accent); text-transform: uppercase; font-size: 11px; }
+.phase .p-detail { color: var(--text-dim); font-size: 12px; }
+.sync-ok { color: var(--green); font-weight: 700; }
+/* v88: ⚡️ Modalità Adattiva Giorno per Giorno (badge dinamico live 15 metriche) */
+.adaptive-mode-badge {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: #a5f3fc;
+  background: rgba(56, 189, 248, .08);
+  border: 1px solid rgba(56, 189, 248, .35);
+  box-shadow: 0 0 14px rgba(56, 189, 248, .12) inset;
+}
+.sync-err { color: var(--red); font-weight: 600; }
+
+/* ---------- 🏆 Resoconto & Feedback Post-Corsa (v66) ---------- */
+/* 🏆 Card Resoconto Post-Corsa (v76): glassmorphism scuro #131b2e + bordo neon */
+#home-post-run-container { display: block; }
+#home-post-run-container[hidden] { display: none; }
+.post-run-card {
+  margin-top: 12px; padding: 12px 14px;
+  border-radius: 12px;
+  border: 1px solid rgba(56, 189, 248, 0.45);
+  background: linear-gradient(160deg, rgba(19, 27, 46, 0.92), rgba(13, 18, 32, 0.85));
+  backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+  box-shadow: 0 0 14px rgba(56, 189, 248, 0.18), inset 0 0 18px rgba(56, 189, 248, 0.06);
+}
+
+/* ---------- STATO "ALLENAMENTO ESEGUITO" (v67) ---------- */
+.badge-garmin {
+  display: inline-flex; align-items: center; gap: 6px;
+  margin: 6px 0 10px; padding: 5px 12px;
+  border-radius: 999px; font-size: 10.5px; font-weight: 800; letter-spacing: 0.4px;
+  color: #9ff5c8; background: rgba(16, 185, 129, 0.12);
+  border: 1px solid rgba(16, 185, 129, 0.55);
+  box-shadow: 0 0 10px rgba(16, 185, 129, 0.35), inset 0 0 8px rgba(16, 185, 129, 0.10);
+  text-shadow: 0 0 6px rgba(16, 185, 129, 0.8);
+}
+.workout-done-title {
+  font-size: 15px; font-weight: 800; color: #7ef0b0;
+  text-shadow: 0 0 8px rgba(16, 185, 129, 0.5); margin-bottom: 6px;
+}
+.btn-done {
+  background: linear-gradient(135deg, #10b981, #059669) !important;
+  color: #fff !important; border-color: #10b981 !important;
+  box-shadow: 0 0 12px rgba(16, 185, 129, 0.45);
+}
+.post-run-title { font-size: 13.5px; font-weight: 800; color: #ffd98a; margin-bottom: 6px; }
+.post-run-score {
+  display: inline-block; font-size: 12px; font-weight: 800; letter-spacing: 0.4px;
+  color: #1b1b24; background: linear-gradient(135deg, #ffd98a, #ffb45e);
+  border-radius: 999px; padding: 3px 12px; margin-bottom: 8px;
+}
+.post-run-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 8px; }
+.post-run-grid div {
+  display: flex; flex-direction: column; gap: 2px;
+  background: rgba(255, 255, 255, 0.04); border: 1px solid var(--border);
+  border-radius: 8px; padding: 8px 10px;
+}
+.post-run-grid b { font-size: 10px; text-transform: uppercase; letter-spacing: 0.8px; color: var(--muted); }
+.post-run-grid span { font-size: 12px; color: #fff; font-weight: 600; }
+
+/* 🔍 Dettaglio Fasi & Lap Orologio (v79): sezione espandibile */
+.post-run-laps {
+  margin: 8px 0 10px; padding: 8px 10px;
+  border-radius: 10px; border: 1px solid rgba(56, 189, 248, 0.30);
+  background: rgba(56, 189, 248, 0.06);
+}
+.post-run-laps > summary, .phase-block > summary {
+  cursor: pointer; font-size: 11.5px; color: #9be8ff; font-weight: 700;
+  letter-spacing: 0.3px; user-select: none; list-style: none;
+}
+.post-run-laps > summary::-webkit-details-marker,
+.phase-block > summary::-webkit-details-marker { display: none; }
+.post-run-laps > summary::before { content: "▸ "; }
+.post-run-laps[open] > summary::before { content: "▾ "; }
+.phase-block {
+  margin-top: 6px; padding: 6px 8px;
+  border-radius: 8px; border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.03);
+}
+.phase-block > summary::before { content: "＋ "; color: #7ef0b0; }
+.phase-block[open] > summary::before { content: "－ "; color: #7ef0b0; }
+.phase-laps { margin-top: 6px; display: flex; flex-direction: column; gap: 3px; }
+.lap-row {
+  display: grid; grid-template-columns: 44px 1fr 1fr 1fr 1.2fr;
+  gap: 4px; align-items: center;
+  font-size: 10px; color: #cfe8f7;
+  padding: 3px 6px; border-radius: 6px; background: rgba(0, 0, 0, 0.18);
+}
+.lap-row span:first-child { font-weight: 800; color: #9be8ff; }
+.lap-row span:nth-child(3) { color: #ffd98a; }
+
+/* ---------- sezione Allenamento: card stato Garmin / consiglio adattivo ---------- */
+.garmin-cal {
+  display: flex; gap: 12px; align-items: flex-start;
+  border-radius: 12px; padding: 12px 14px; border: 1px solid var(--border);
+}
+.garmin-cal .cal-icon { font-size: 22px; line-height: 1.3; }
+.garmin-cal b { display: block; margin-bottom: 2px; }
+.garmin-cal .p-detail { color: var(--text-dim); font-size: 12px; }
+.garmin-cal.ok { background: rgba(34, 197, 94, .08); border-color: rgba(34, 197, 94, .35); }
+.garmin-cal.empty { background: var(--bg-soft); }
+.garmin-cal.warn { background: rgba(245, 158, 11, .08); border-color: rgba(245, 158, 11, .35); }
+.badge {
+  display: inline-block; margin-top: 6px; padding: 3px 8px; border-radius: 20px;
+  font-size: 11px; font-weight: 700;
+}
+.badge-ok { background: rgba(34, 197, 94, .15); color: var(--green); }
+.advice-banner {
+  display: flex; gap: 12px; align-items: flex-start;
+  border-radius: 12px; padding: 12px 14px; border: 1px solid var(--border); margin-bottom: 10px;
+}
+.advice-banner .advice-icon { font-size: 24px; line-height: 1.2; }
+.advice-banner .advice-title { font-weight: 800; font-size: 14px; margin-bottom: 2px; }
+.advice-banner p { font-size: 13px; color: var(--text); opacity: .9; }
+.advice-banner.ok { background: rgba(34, 197, 94, .08); border-color: rgba(34, 197, 94, .35); }
+.advice-banner.ok .advice-title { color: var(--green); }
+.advice-banner.warn { background: rgba(239, 68, 68, .08); border-color: rgba(239, 68, 68, .4); }
+.advice-banner.warn .advice-title { color: var(--red); }
+.advice-banner.neutral { background: var(--bg-soft); }
+.advice-banner.neutral .advice-title { color: var(--text-dim); }
+.advice-workout {
+  border: 1px dashed var(--border); border-radius: 12px;
+  padding: 10px 12px; margin: 4px 0 10px;
+}
+.btn-row { display: flex; gap: 10px; margin-top: 12px; }
+.btn-row .btn { flex: 1; }
+
+/* ---------- body map (infortuni) ---------- */
+/* ---------- INJURY LAB 3.0: Card Anatomiche Executive Neon ---------- */
+.body-cards { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 12px; }
+.body-card {
+  position: relative; display: flex; flex-direction: column; align-items: flex-start; gap: 8px;
+  padding: 14px; border-radius: 16px; text-align: left; cursor: pointer;
+  background: linear-gradient(160deg, rgba(255,255,255,.06), rgba(255,255,255,.015));
+  border: 1px solid var(--border);
+  box-shadow: inset 0 0 24px rgba(255,255,255,.02);
+  transition: transform .15s, border-color .15s, box-shadow .15s;
+}
+.body-card:active { transform: scale(.97); }
+/* bordo neon perimetrale in tinta con l'accent della card */
+.body-card::before {
+  content: ""; position: absolute; inset: -1px; border-radius: inherit; padding: 1.5px;
+  background: linear-gradient(135deg, var(--card-accent), transparent 55%);
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor; mask-composite: exclude;
+  pointer-events: none; opacity: .85;
+}
+.body-card:hover {
+  border-color: color-mix(in srgb, var(--card-accent) 40%, transparent);
+  box-shadow: 0 0 20px color-mix(in srgb, var(--card-accent) 18%, transparent);
+}
+.body-card-icon { font-size: 30px; filter: drop-shadow(0 0 8px color-mix(in srgb, var(--card-accent) 55%, transparent)); }
+.body-card-txt b { font-size: 13.5px; display: block; color: var(--text); }
+.body-card-txt small { font-size: 11px; color: var(--text-dim); line-height: 1.35; display: block; margin-top: 2px; }
+.card-badges { display: flex; gap: 5px; flex-wrap: wrap; margin-top: 2px; }
+.card-badge {
+  width: 24px; height: 24px; border-radius: 50%; display: flex; align-items: center; justify-content: center;
+  font-size: 11px; font-weight: 800; color: #0e1117; box-shadow: 0 0 9px currentColor;
+}
+.legend { display: flex; justify-content: center; gap: 14px; font-size: 11px; color: var(--text-dim); margin-top: 12px; flex-wrap: wrap; }
+.dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 4px; vertical-align: -1px; }
+.dot-1 { background: #facc15; } .dot-3 { background: #f97316; } .dot-4 { background: #ef4444; }
+
+.injury-item {
+  display: flex; align-items: center; gap: 10px; padding: 10px 0;
+  border-bottom: 1px dashed var(--border); font-size: 13.5px;
+}
+.injury-item:last-child { border-bottom: none; }
+.injury-item .sev { width: 34px; height: 34px; border-radius: 10px; display: flex; align-items: center; justify-content: center; font-weight: 800; color: #fff; flex-shrink: 0; }
+.injury-item .inf { flex: 1; }
+.injury-item .inf b { font-size: 14px; }
+.injury-item .inf small { display: block; color: var(--text-dim); }
+.injury-item .resolved { text-decoration: line-through; opacity: .55; }
+.injury-item .del, .injury-item .edit {
+  background: none; border: none; font-size: 18px; cursor: pointer; padding: 6px; color: var(--red);
+}
+.injury-item .edit { color: var(--text-dim); }
+.item-actions { display: flex; flex-direction: column; gap: 2px; flex-shrink: 0; }
+
+/* ---------- INJURY LAB 2.0: impatto biomeccanico + referto ---------- */
+.impact-badge {
+  display: inline-block; padding: 8px 14px; border-radius: 10px; font-weight: 700;
+  font-size: 13.5px; margin: 6px 0 4px;
+}
+.impact-stop   { background: rgba(239,68,68,.15);  color: var(--red);   border: 1px solid rgba(239,68,68,.4); }
+.impact-reduce { background: rgba(245,158,11,.15); color: var(--amber); border: 1px solid rgba(245,158,11,.4); }
+.impact-modify { background: rgba(167,139,250,.15); color: #a78bfa;      border: 1px solid rgba(167,139,250,.4); }
+.impact-mild   { background: rgba(34,197,94,.12);  color: var(--green); border: 1px solid rgba(34,197,94,.35); }
+.impact-chip {
+  display: inline-block; margin-left: 6px; padding: 1px 8px; border-radius: 20px;
+  font-size: 11px; font-weight: 700; vertical-align: middle;
+}
+.injury-item .inf { flex: 1; }
+.report-toggle {
+  background: none; border: 1px solid var(--border); border-radius: 8px;
+  color: var(--text-dim); font-size: 12px; padding: 4px 10px; margin-top: 6px;
+  cursor: pointer;
+}
+.report-toggle:hover { border-color: var(--accent); color: var(--accent); }
+.injury-report {
+  margin-top: 8px; padding: 10px 12px; border-radius: 10px;
+  background: rgba(255,255,255,.03); border: 1px solid var(--border);
+}
+.rep-diag { font-size: 13px; color: var(--text); margin-bottom: 6px; }
+.rep-block { font-size: 12.5px; color: var(--text-dim); margin: 5px 0; }
+.rep-block ul { margin: 3px 0 0 16px; padding: 0; }
+.rep-block li { margin: 2px 0; }
+
+/* ---------- modal ---------- */
+.modal {
+  position: fixed; inset: 0; z-index: 50;
+  background: rgba(0,0,0,.6); backdrop-filter: blur(4px);
+  display: flex; align-items: flex-end; justify-content: center;
+}
+.modal-box {
+  width: 100%; max-width: 480px; background: var(--glass);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border-radius: 22px 22px 0 0; padding: 20px 18px calc(22px + var(--safe-bottom));
+  border: 1px solid var(--glass-border); border-bottom: none;
+  box-shadow: var(--neon-glow);
+  animation: slideUp .25s ease;
+}
+@keyframes slideUp { from { transform: translateY(40px); opacity: 0; } to { transform: none; opacity: 1; } }
+.severity-picker { display: flex; gap: 8px; margin: 8px 0 12px; }
+.severity-picker button {
+  flex: 1; height: 42px; border-radius: 10px; border: 1px solid var(--border);
+  background: var(--bg-soft); color: var(--text); font-weight: 700; font-size: 13px; cursor: pointer;
+  transition: all .12s;
+}
+.severity-picker button[data-s="1"], .severity-picker button[data-s="2"] { color: #facc15; border-color: rgba(250,204,21,.35); }
+.severity-picker button[data-s="3"] { color: #f97316; border-color: rgba(249,115,22,.35); }
+.severity-picker button[data-s="4"], .severity-picker button[data-s="5"] { color: #ef4444; border-color: rgba(239,68,68,.35); }
+.severity-picker button.sel {
+  background: currentColor; border-color: currentColor; color: #0e1117; font-weight: 800;
+  box-shadow: 0 0 12px currentColor;
+}
+/* step della modale Injury Lab 3.0: parte esatta + severità + nota */
+.modal-step {
+  display: block; font-size: 11.5px; font-weight: 700; color: var(--text-dim);
+  text-transform: uppercase; letter-spacing: .4px; margin: 12px 0 6px;
+}
+.part-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.part-chip {
+  padding: 9px 10px; border-radius: 10px; border: 1px solid var(--border);
+  background: var(--bg-soft); color: var(--text); font-size: 12.5px; font-weight: 600;
+  cursor: pointer; text-align: left; transition: background .12s, border-color .12s, color .12s;
+}
+.part-chip.sel {
+  background: var(--accent); border-color: var(--accent); color: #fff;
+  box-shadow: 0 0 10px rgba(79,140,255,.35);
+}
+.modal-actions { display: flex; gap: 10px; margin-top: 14px; }
+.modal-actions .btn { flex: 1; }
+
+/* ===== MODALE GESTIONE ACCOUNT (Glassmorphic Navy #131b2e · blur 16px) ===== */
+.acct-box {
+  background: #131b2e !important;
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid rgba(79, 140, 255, 0.18) !important; border-bottom: none;
+  box-shadow: 0 0 24px rgba(79, 140, 255, 0.14), 0 18px 50px rgba(0, 0, 0, .5) !important;
+}
+.acct-head {
+  display: flex; align-items: center; justify-content: space-between;
+  margin-bottom: 4px;
+}
+.acct-head h3 { margin: 0; font-size: 17px; color: #fff; }
+.acct-x {
+  width: 32px; height: 32px; border-radius: 50%; border: 1px solid rgba(79,140,255,.25);
+  background: rgba(79,140,255,.08); color: #94a3b8; font-size: 14px; line-height: 1;
+  cursor: pointer; transition: all .12s;
+}
+.acct-x:hover { background: rgba(239,68,68,.18); border-color: rgba(239,68,68,.4); color: #f87171; }
+.acct-active {
+  display: flex; align-items: center; gap: 12px;
+  background: linear-gradient(135deg, rgba(79,140,255,.16), rgba(0,210,255,.07));
+  border: 1px solid rgba(79,140,255,.25);
+  border-radius: 14px; padding: 12px 14px; margin: 10px 0 4px;
+  box-shadow: inset 0 0 18px rgba(79,140,255,.08);
+}
+.acct-active-ico {
+  width: 42px; height: 42px; border-radius: 12px; flex: none;
+  display: flex; align-items: center; justify-content: center; font-size: 20px;
+  background: rgba(0,210,255,.14); border: 1px solid rgba(0,210,255,.3);
+}
+.acct-active-info { min-width: 0; }
+.acct-active-name {
+  font-size: 15px; font-weight: 800; color: #fff;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.acct-active-mail {
+  font-size: 11.5px; color: #94a3b8; margin: 1px 0 3px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.acct-active-vo2 { font-size: 12px; color: #e6eaf2; }
+.acct-active-vo2 b {
+  color: #00d2ff; font-size: 14px;
+  text-shadow: 0 0 8px rgba(0,210,255,.5);
+}
+.acct-list { display: flex; flex-direction: column; gap: 8px; margin: 8px 0 4px; }
+.acct-empty {
+  font-size: 12px; color: #94a3b8; padding: 10px 12px;
+  border: 1px dashed rgba(148,163,184,.25); border-radius: 10px; text-align: center;
+}
+.acct-item {
+  display: flex; align-items: center; gap: 10px;
+  background: rgba(15, 23, 42, .55);
+  border: 1px solid rgba(79,140,255,.14);
+  border-radius: 12px; padding: 9px 11px;
+  transition: border-color .12s, background .12s;
+}
+.acct-item.active {
+  border-color: rgba(34,197,94,.5);
+  background: rgba(34,197,94,.07);
+  box-shadow: 0 0 12px rgba(34,197,94,.12);
+}
+.acct-item-ico {
+  width: 34px; height: 34px; border-radius: 10px; flex: none;
+  display: flex; align-items: center; justify-content: center; font-size: 16px;
+  background: rgba(79,140,255,.12);
+}
+.acct-item-info { flex: 1; min-width: 0; }
+.acct-item-name {
+  font-size: 13px; font-weight: 700; color: #e6eaf2;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.acct-item-mail {
+  font-size: 11px; color: #64748b;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.acct-item-tag {
+  font-size: 9.5px; font-weight: 800; letter-spacing: .6px;
+  color: #4ade80; text-transform: uppercase;
+  border: 1px solid rgba(34,197,94,.4); border-radius: 999px; padding: 3px 8px;
+}
+.acct-item-switch {
+  flex: none; font-size: 11.5px; font-weight: 700;
+  color: #38bdf8; background: rgba(56,189,248,.1);
+  border: 1px solid rgba(56,189,248,.35); border-radius: 999px; padding: 6px 11px;
+  cursor: pointer; transition: all .12s;
+}
+.acct-item-switch:hover {
+  background: rgba(56,189,248,.22); box-shadow: 0 0 10px rgba(56,189,248,.3);
+}
+.acct-btn { margin-top: 10px; }
+
+/* ---------- goals ---------- */
+.segmented { display: flex; background: var(--bg-soft); border-radius: 12px; padding: 4px; margin: 10px 0; }
+.seg-btn { flex: 1; border: none; background: transparent; color: var(--text-dim); padding: 10px; border-radius: 9px; font-weight: 700; font-size: 14px; cursor: pointer; }
+.seg-btn.sel { background: var(--accent); color: #fff; }
+.time-inputs { display: flex; align-items: center; gap: 8px; margin-top: 12px; }
+.time-inputs input { text-align: center; font-size: 22px; font-weight: 700; padding: 10px 6px; }
+.time-inputs span { font-size: 22px; color: var(--text-dim); font-weight: 700; }
+.goal-result { margin-top: 12px; padding: 12px; border-radius: 12px; background: var(--bg-soft); font-size: 13px; text-align: center; }
+.goal-result b { font-size: 18px; color: var(--green); }
+.threshold-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+.th-item { background: var(--bg-soft); border-radius: 12px; padding: 10px 4px; text-align: center; }
+.th-val { display: block; font-size: 17px; font-weight: 800; color: var(--accent); }
+.th-lab { font-size: 9.5px; color: var(--text-dim); }
+
+/* ---------- tabella multisettimanale adattiva ---------- */
+.day-picker { display: flex; gap: 6px; margin: 10px 0 14px; flex-wrap: wrap; }
+.day-btn {
+  flex: 1; min-width: 42px; padding: 10px 6px; border-radius: 10px;
+  border: 1px solid var(--border); background: var(--bg-soft);
+  color: var(--text-dim); font-weight: 700; font-size: 12.5px; cursor: pointer;
+  transition: background .15s, color .15s, border-color .15s;
+}
+.day-btn.sel { background: var(--accent); border-color: var(--accent); color: #fff; }
+.tbl-syncall { padding: 8px 12px; font-size: 12px; }
+.tbl-row {
+  display: flex; align-items: flex-start; gap: 10px; padding: 10px 0;
+  border-bottom: 1px dashed var(--border); font-size: 13.5px;
+}
+.tbl-row:last-child { border-bottom: none; }
+.tbl-row.today { background: var(--bg-soft); border-radius: 12px; padding: 10px; border-bottom: none; }
+.tbl-date { width: 78px; flex-shrink: 0; font-size: 11.5px; color: var(--text-dim); line-height: 1.3; padding-top: 1px; }
+.tbl-date .today-tag { display: block; margin-top: 4px; text-align: center; }
+.tbl-info { flex: 1; }
+.tbl-info .p-detail { margin-top: 2px; }
+.tbl-badges { margin-top: 4px; font-size: 10.5px; color: var(--accent); font-weight: 700; }
+.tbl-row.rest .tbl-info b { color: var(--text-dim); }
+.tbl-sync { padding: 7px 10px; font-size: 13px; flex-shrink: 0; }
+.goal-date-label { display: block; margin-top: 12px; font-size: 12px; color: var(--text-dim); }
+.goal-date-label small { color: var(--text-dim); opacity: .8; }
+
+/* ---------- chat ---------- */
+.tab-chat { display: flex; flex-direction: column; }
+.chat-log { display: flex; flex-direction: column; gap: 8px; padding: 6px 0 10px; }
+.bubble { max-width: 84%; padding: 10px 13px; border-radius: 16px; font-size: 14px; white-space: pre-wrap; word-break: break-word; }
+.bubble.user { align-self: flex-end; background: var(--accent); color: #fff; border-bottom-right-radius: 5px; }
+.bubble.coach { align-self: flex-start; background: var(--card-2); border: 1px solid var(--border); border-bottom-left-radius: 5px; }
+.bubble.workout { align-self: flex-start; background: var(--card); border: 1px solid var(--accent); border-bottom-left-radius: 5px; max-width: 94%; font-size: 13px; }
+.bubble.warn { align-self: flex-start; background: rgba(239,68,68,.12); border: 1px solid rgba(239,68,68,.5); color: #fca5a5; border-bottom-left-radius: 5px; }
+.chat-actions { display: flex; gap: 8px; margin-bottom: 8px; }
+.chat-actions .btn { flex: 1; font-size: 12.5px; padding: 10px 8px; }
+.chat-input-row { display: flex; gap: 8px; position: sticky; bottom: calc(var(--nav-h) + var(--safe-bottom)); background: rgba(13, 20, 32, 0.85); backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px); padding: 8px 0; }
+.chat-input-row input { flex: 1; }
+.chat-input-row .btn { width: 46px; padding: 0; }
+
+/* ---------- Onboarding / login (connetti Garmin) ---------- */
+.login-screen {
+  position: fixed; inset: 0; z-index: 100;
+  background: radial-gradient(1200px 600px at 50% -10%, rgba(56,189,248,.12), transparent),
+              linear-gradient(160deg, #0e1117 0%, #0a0d13 100%);
+  display: flex; align-items: center; justify-content: center;
+  padding: 24px;
+  overflow-y: auto;
+}
+.login-box {
+  width: 100%; max-width: 380px;
+  background: rgba(22, 27, 38, .92);
+  border: 1px solid rgba(56, 189, 248, .25);
+  border-radius: 20px;
+  padding: 28px 24px;
+  box-shadow: 0 24px 70px rgba(0,0,0,.55), 0 0 0 1px rgba(56,189,248,.06) inset;
+  text-align: left;
+}
+/* Hero immagine onboarding: logo ufficiale MyPTAI (SVG wide 800x240) */
+.hero-img-constrained {
+  max-width: 240px;
+  width: 100%;
+  height: auto;
+  max-height: 110px;
+  object-fit: contain;
+  display: block;
+  margin: 0 auto 18px auto;
+  border-radius: 18px;
+  box-shadow: 0 8px 24px rgba(0, 210, 255, 0.25);
+}
+.login-box h2 {
+  font-size: 21px; margin-bottom: 6px; text-align: center;
+  background: linear-gradient(90deg, #38bdf8, #a78bfa);
+  -webkit-background-clip: text; background-clip: text; color: transparent;
+}
+/* ===== LOCK TIPOGRAFIA ONBOARDING (regole immutabili) =====
+   !important: nessun stile inline/JS può sovrascrivere la tipografia dell'onboarding */
+.modal-title {
+  font-size: 1.4rem !important;
+  font-weight: 700 !important;
+  color: #ffffff !important;
+  text-align: center;
+  margin-bottom: 8px;
+}
+.login-subtitle {
+  font-size: 0.92rem !important;
+  font-weight: 400 !important;
+  color: #94a3b8 !important;
+  text-align: center;
+  line-height: 1.5 !important;
+  margin-bottom: 20px;
+}
+.login-label {
+  display: block; font-size: 12px; font-weight: 600; color: var(--text-mid);
+  margin: 14px 0 6px; letter-spacing: .3px;
+}
+.login-box input {
+  width: 100%; padding: 12px 14px;
+  background: rgba(10, 13, 20, .7);
+  border: 1px solid rgba(148, 163, 184, .25);
+  border-radius: 12px;
+  color: var(--text); font-size: 14px;
+  text-align: left; letter-spacing: normal;
+}
+.login-box input:focus {
+  border-color: rgba(56, 189, 248, .7);
+  box-shadow: 0 0 0 3px rgba(56, 189, 248, .15);
+  outline: none;
+}
+.login-err { color: var(--red); font-size: 13px; margin-top: 12px; font-weight: 600; text-align: center; }
+.login-err.amber { color: #fbbf24; } /* avviso rate limit (429): ambra, non rosso */
+.login-note {
+  font-size: 12px; color: var(--text-dim); margin-top: 16px;
+  text-align: center; line-height: 1.5;
+}
+.login-box .btn { margin-top: 18px; }
+
+/* ---------- Footer Privacy & GDPR ---------- */
+.app-footer {
+  position: fixed; left: 0; right: 0;
+  bottom: calc(var(--nav-h) + var(--safe-bottom));
+  display: flex; justify-content: center; flex-wrap: wrap; gap: 4px 14px;
+  padding: 8px 12px calc(var(--safe-bottom) + 6px);
+  font-size: 11px; z-index: 5;
+  background: linear-gradient(transparent, var(--bg) 65%);
+  pointer-events: none;
+}
+/* Footer fluido: staccato dalle card biometriche e dalla nav bar inferiore */
+.footer, .app-footer, .creator-sign {
+  position: relative !important;
+  margin-top: 32px !important;
+}
+.app-footer .footer-link { pointer-events: auto; }
+.footer-link {
+  background: none; border: none; color: var(--text-dim);
+  font-size: 11px; text-decoration: underline; cursor: pointer;
+  padding: 4px 6px; font-family: inherit;
+}
+/* Firma del founder (link Instagram) */
+.creator-sign {
+  flex-basis: 100%; text-align: center;
+  margin: 8px 0 0; padding-top: 6px;
+  border-top: 1px solid rgba(255,255,255,.07);
+  color: var(--text-dim); font-size: 10.5px;
+  pointer-events: auto;
+}
+.creator-sign a {
+  color: var(--accent); text-decoration: none; font-weight: 600;
+}
+.footer-link.danger { color: #f87171; }
+
+/* ---------- Privacy / GDPR ---------- */
+.privacy-body { text-align: left; font-size: 13px; color: var(--text-mid); line-height: 1.55; }
+.privacy-body p { margin: 0 0 10px; }
+.privacy-consent {
+  display: flex; gap: 10px; align-items: flex-start; text-align: left;
+  background: rgba(56, 189, 248, .07); border: 1px solid rgba(56, 189, 248, .25);
+  border-radius: 12px; padding: 10px 12px; margin-top: 14px;
+  font-size: 12.5px; color: var(--text-mid); line-height: 1.45; cursor: pointer;
+}
+.privacy-consent input { margin-top: 2px; accent-color: var(--accent); flex-shrink: 0; }
+.privacy-consent a { color: var(--accent); text-decoration: underline; }
+/* Documenti legali: contenuto scorrevole dentro la modale */
+.legal-scroll { max-height: 55vh; overflow-y: auto; padding-right: 4px; }
+.legal-scroll h4 { margin: 14px 0 6px; color: var(--text); font-size: 13px; }
+.legal-scroll h4:first-child { margin-top: 0; }
+
+/* ---------- toast ---------- */
+.toast {
+  position: fixed; left: 50%; bottom: calc(var(--nav-h) + 26px);
+  transform: translateX(-50%); z-index: 60;
+  background: var(--card-2); border: 1px solid var(--border); color: var(--text);
+  padding: 11px 18px; border-radius: 999px; font-size: 13px; font-weight: 600;
+  box-shadow: 0 6px 24px rgba(0,0,0,.5);
+  animation: fadeIn .2s ease;
+}
+
+/* ---------- bottom nav ---------- */
+.bottom-nav {
+  position: fixed; left: 0; right: 0; bottom: 0; z-index: 30;
+  display: flex; justify-content: space-around;
+  background: rgba(13, 20, 32, 0.78); backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border-top: 1px solid var(--glass-border);
+  padding-bottom: var(--safe-bottom);
+  height: calc(var(--nav-h) + var(--safe-bottom));
+}
+.nav-btn {
+  flex: 1; background: none; border: none; color: var(--text-dim);
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 3px; font-size: 10px; font-weight: 600; cursor: pointer; padding: 4px 0;
+}
+.nav-btn .nav-ico { font-size: 20px; filter: grayscale(.5); opacity: .8; }
+.nav-btn.active { color: var(--accent); }
+.nav-btn.active .nav-ico { filter: none; opacity: 1; }
+
+/* ---------- Karvonen & ACWR ---------- */
+.karvonen-card {
+  margin-top: 14px;
+}
+.acwr-bar-wrap {
+  margin: 12px 0 16px;
+  background: rgba(0, 0, 0, 0.25);
+  padding: 10px 14px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+}
+.acwr-labels {
+  display: flex;
+  justify-content: space-between;
+  font-size: 11px;
+  color: var(--text-dim);
+  margin-bottom: 8px;
+}
+.acwr-labels b { color: var(--text); }
+.acwr-track {
+  position: relative;
+  height: 8px;
+  background: linear-gradient(90deg, #f59e0b 0%, #22c55e 35%, #22c55e 65%, #f59e0b 80%, #ef4444 100%);
+  border-radius: 99px;
+  overflow: visible;
+}
+.acwr-indicator {
+  position: absolute;
+  top: -4px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #ffffff;
+  border: 2px solid #0d1420;
+  box-shadow: 0 0 8px #ffffff;
+  transform: translateX(-50%);
+  transition: left 0.4s ease;
+}
+.badge {
+  font-size: 10.5px;
+  font-weight: 800;
+  letter-spacing: 0.5px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  text-transform: uppercase;
+}
+.badge-sweet {
+  background: rgba(34, 197, 94, 0.15);
+  color: #4ade80;
+  border: 1px solid rgba(34, 197, 94, 0.4);
+}
+.badge-amber {
+  background: rgba(245, 158, 11, 0.15);
+  color: #fbbf24;
+  border: 1px solid rgba(245, 158, 11, 0.4);
+}
+.badge-red {
+  background: rgba(239, 68, 68, 0.15);
+  color: #f87171;
+  border: 1px solid rgba(239, 68, 68, 0.4);
+}
+.karvonen-zones-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  gap: 8px;
+  margin-top: 10px;
+}
+.k-zone-item {
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 10px;
+  padding: 8px 10px;
+}
+.kz-title {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--accent);
+  margin-bottom: 2px;
+}
+.kz-bpm {
+  font-size: 13px;
+  font-weight: 800;
+  color: #ffffff;
+}
+.kz-desc {
+  font-size: 10px;
+  color: var(--text-dim);
+}
+
+/* ---------- Morning Check Card ---------- */
+.morning-check-card {
+  margin-top: 14px;
+  background: linear-gradient(135deg, rgba(19, 27, 46, 0.9), rgba(26, 36, 64, 0.8));
+  border: 1px solid rgba(79, 140, 255, 0.25);
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+}
+.action-box {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: rgba(34, 197, 94, 0.08);
+  border: 1px solid rgba(34, 197, 94, 0.3);
+  border-radius: 10px;
+  padding: 10px 12px;
+  margin-top: 10px;
+}
+.action-ico { font-size: 18px; }
+.action-text {
+  font-size: 13px;
+  font-weight: 600;
+  color: #86efac;
+  line-height: 1.4;
+}

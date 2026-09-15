@@ -1,0 +1,429 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+  <meta name="theme-color" content="#0e1117">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="MyPTAI">
+  <!-- OpenGraph / social preview (WhatsApp, Instagram, Telegram) -->
+  <meta property="og:title" content="MyPTAI — Performance Coach">
+  <meta property="og:description" content="Listen to your body. Maximize your performance.">
+  <meta property="og:image" content="https://myptai.app/img/og_preview.jpg">
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://myptai.app/">
+  <meta property="og:locale" content="it_IT">
+  <meta name="twitter:card" content="summary_large_image">
+  <link rel="manifest" href="/manifest.json">
+  <link rel="apple-touch-icon" href="/img/logo.svg?v=92">
+  <link rel="icon" type="image/svg+xml" href="/img/logo.svg?v=92">
+  <title>MyPTAI · Coach personale — dati reali Garmin</title>
+  <link rel="stylesheet" href="/css/style.css?v=92">
+</head>
+<body>
+  <!-- Onboarding: connetti il tuo account Garmin (login multi-dispositivo) -->
+  <div id="login-screen" class="login-screen hidden">
+    <div class="login-box">
+      <img src="/img/logo.svg?v=92" alt="MyPTAI — Performance Coach" class="hero-img-constrained" width="650" height="180">
+      <p id="login-sub" class="login-subtitle">Il primo Coach AI che ascolta il tuo corpo in qualsiasi momento.
+        Unisci i dati del tuo Garmin all'Intelligenza Artificiale: adatta ogni sessione
+        di allenamento al tuo stato di forma per prevenire gli infortuni e
+        massimizzare i tuoi progressi.</p>
+      <label class="login-label" for="login-email">Email Garmin</label>
+      <input id="login-email" type="email" autocomplete="username" placeholder="la.tua.email@gmail.com">
+      <label class="login-label" for="login-password">Password Garmin</label>
+      <input id="login-password" type="password" autocomplete="current-password" placeholder="••••••••">
+      <button id="login-btn" class="btn btn-primary btn-block">🚀 Inizia Coaching</button>
+      <p id="login-err" class="login-err hidden">❌ Credenziali non valide</p>
+      <p class="login-note">🔒 Le credenziali vengono validate dal server e la sessione resta salvata su questo dispositivo.</p>
+    </div>
+  </div>
+
+  <header class="app-header">
+    <div class="header-brand">
+      <!-- Logo ufficiale MyPTAI (SVG neon) nell'Header Navbar in alto a sinistra -->
+      <img id="brand-logo" src="/img/logo.svg?v=92" alt="MyPTAI — Performance Coach" class="brand-logo-img" width="650" height="180">
+      <span id="user-display-name" class="user-display-name" title="Nome · FC Soglia · Passo Soglia (Garmin)"></span>
+    </div>
+    <!-- Badge connessione Garmin (verde neon) — cliccabile: apre Gestione Account -->
+    <div id="garmin-badge-btn" class="garmin-badge" role="button" tabindex="0" title="Gestisci account · Garmin Connect">
+      <span class="garmin-dot"></span>GARMIN&nbsp;CONNECTED
+    </div>
+    <div id="header-pill" class="pill pill-neutral hidden" title="Readiness">···</div>
+  </header>
+
+  <main id="main">
+    <!-- ============ TAB READINESS · MASTER IBRIDO HOME ============ -->
+    <section id="tab-readiness" class="tab active">
+      <!-- 2) Anello 3D Readiness: punteggio grande + arco tricolore + verdetto -->
+      <div class="readiness-card ring-3d">
+        <div class="gauge-wrap">
+          <svg id="gauge" viewBox="0 0 200 200" width="210" height="210">
+            <defs>
+              <linearGradient id="gradGauge" x1="0%" y1="0%" x2="100%" y2="100%">
+                <stop offset="0%" stop-color="#ef4444"/>
+                <stop offset="50%" stop-color="#f59e0b"/>
+                <stop offset="100%" stop-color="#22c55e"/>
+              </linearGradient>
+              <filter id="glowGauge" x="-40%" y="-40%" width="180%" height="180%">
+                <feGaussianBlur stdDeviation="3.2" result="b"/>
+                <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+              </filter>
+            </defs>
+            <circle class="gauge-track" cx="100" cy="100" r="84"/>
+            <circle class="gauge-track-soft" cx="100" cy="100" r="72"/>
+            <circle id="gauge-arc" class="gauge-arc" cx="100" cy="100" r="84"
+                    stroke="url(#gradGauge)" stroke-dasharray="0 527.5" filter="url(#glowGauge)" />
+          </svg>
+          <div class="readiness-ring-inner">
+            <span class="readiness-ring-label">READINESS</span>
+            <span class="readiness-ring-score" id="readiness-ring-score">--</span>
+            <span class="readiness-ring-verdict" id="readiness-ring-verdict">FORMA OTTIMA</span>
+          </div>
+        </div>
+        <div id="readiness-meta" class="readiness-meta"></div>
+      </div>
+
+      <!-- 3) Griglia 7 componenti biometriche reali + quadratino "Medie 7 Notti" -->
+      <div class="card metrics-card">
+        <div class="metrics-head">
+          <h2>Biometria di oggi</h2>
+          <span id="metrics-date" class="metrics-date"></span>
+        </div>
+        <div id="metrics-grid" class="metrics-grid"></div>
+      </div>
+
+      <!-- Card Fisiologia Karvonen (HRR) & ACWR Live -->
+      <div class="card karvonen-card" id="karvonen-card">
+        <div class="metrics-head">
+          <h2>🫀 Fisiologia Karvonen & Carico ACWR</h2>
+          <span id="acwr-badge" class="badge badge-sweet">SWEET SPOT</span>
+        </div>
+        <div class="acwr-bar-wrap">
+          <div class="acwr-labels">
+            <span>Carico Acuto 7g: <b id="acwr-acute">—</b></span>
+            <span>ACWR: <b id="acwr-ratio">—</b></span>
+            <span>Carico Cronico 28g: <b id="acwr-chronic">—</b></span>
+          </div>
+          <div class="acwr-track">
+            <div id="acwr-indicator" class="acwr-indicator" style="left: 45%;"></div>
+          </div>
+        </div>
+        <div id="karvonen-zones-grid" class="karvonen-zones-grid"></div>
+      </div>
+
+      <!-- Card Morning Check & Fisiologia Giornaliera (Decision Engine) -->
+      <div class="card morning-check-card" id="morning-check-card">
+        <div class="step-head">
+          <span class="step-num">🧠</span>
+          <h2 id="morning-check-title">Morning Check & Decision Engine</h2>
+        </div>
+        <p id="morning-check-explanation" class="hint">Analisi fisiologica in corso...</p>
+        <div id="morning-check-action-box" class="action-box">
+          <span class="action-ico">⚡</span>
+          <span id="morning-check-action-text" class="action-text">—</span>
+        </div>
+      </div>
+
+      <div id="recent" class="card"></div>
+
+      <!-- 4) Card allenamento del giorno + SYNC TO GARMIN (verde neon) -->
+      <div class="card workout-day-card" id="home-workout-card">
+        <div class="workout-day-head">
+          <h2>🏃 Allenamento di oggi</h2>
+          <span id="home-workout-tag" class="tag"></span>
+        </div>
+        <div id="home-workout-body">
+          <p class="hint">Caricamento allenamento...</p>
+        </div>
+        <div class="workout-day-stats">
+          <div class="wds-item"><span>Passo</span><b id="home-workout-pace">—</b><small>min/km</small></div>
+          <div class="wds-item"><span>Distanza</span><b id="home-workout-km">—</b><small>km</small></div>
+          <div class="wds-item"><span>Durata</span><b id="home-workout-dur">—</b><small>min</small></div>
+        </div>
+        <button id="btn-sync-home" class="btn btn-sync-neon btn-block">⚡️ SYNC TO GARMIN</button>
+        <p class="hint" id="sync-home-status"></p>
+      </div>
+
+      <!-- 🏆 RESOCONTO & FEEDBACK POST-CORSA (Workflow 2 Deep Dive) -->
+      <div id="home-post-run-container"></div>
+
+      <button id="btn-refresh" class="btn btn-ghost btn-block">
+        🔄 Aggiorna dati Garmin (live)
+      </button>
+      <p class="hint" id="refresh-hint"></p>
+    </section>
+
+    <!-- ============ TAB ALLENAMENTO ============ -->
+    <section id="tab-workout" class="tab">
+
+      <!-- STEP 1 · OBIETTIVO GARA 10K/21K -->
+      <div class="card step-card">
+        <div class="step-head"><span class="step-num">1</span><h2>🎯 Obiettivo Gara</h2></div>
+        <p class="hint">Imposta l'obiettivo (10K o 21K) e il tempo target: il coach costruirà gli allenamenti per portarti al traguardo.</p>
+        <div class="segmented">
+          <button class="seg-btn" data-race="10K">10K</button>
+          <button class="seg-btn" data-race="21K">21K</button>
+        </div>
+        <div class="time-inputs">
+          <input id="goal-h" type="number" min="0" max="5" placeholder="h" inputmode="numeric">
+          <span>:</span>
+          <input id="goal-m" type="number" min="0" max="59" placeholder="mm" inputmode="numeric">
+          <span>:</span>
+          <input id="goal-s" type="number" min="0" max="59" placeholder="ss" inputmode="numeric">
+        </div>
+        <label class="goal-date-label" for="goal-date">📅 Data della gara <small>(per la tabella "Fino alla Gara")</small></label>
+        <input id="goal-date" type="date">
+        <button id="btn-goal-save" class="btn btn-primary btn-block">💾 Salva obiettivo</button>
+        <div id="goal-result" class="goal-result"></div>
+        <div class="threshold-grid">
+          <div class="th-item"><span class="th-val">176</span><span class="th-lab">FC soglia (bpm)</span></div>
+          <div class="th-item"><span class="th-val">4:44</span><span class="th-lab">Passo soglia (/km)</span></div>
+          <div class="th-item"><span class="th-val">200</span><span class="th-lab">FC max (bpm)</span></div>
+          <div class="th-item"><span class="th-val" id="goal-vo2max">—</span><span class="th-lab">VO₂max</span></div>
+        </div>
+      </div>
+
+      <!-- STEP 2 · GENERA TABELLA SETTIMANALE -->
+      <div class="card step-card">
+        <div class="step-head"><span class="step-num">2</span><h2>📅 Genera Tabella Settimanale</h2></div>
+        <p class="hint">Scegli la durata del microciclo e i giorni di allenamento: il coach posiziona gli allenamenti solo nei giorni scelti e riposo nei giorni liberi.</p>
+        <div class="segmented" id="table-duration">
+          <button class="seg-btn" data-dur="1w">1 Settimana</button>
+          <button class="seg-btn" data-dur="2w">2 Settimane</button>
+          <button class="seg-btn" data-dur="1m">1 Mese</button>
+          <button class="seg-btn" data-dur="race">Fino alla Gara</button>
+        </div>
+        <p class="hint" style="margin-top:12px">Giorni di allenamento</p>
+        <div class="day-picker" id="table-days">
+          <button class="day-btn" data-day="0">Lun</button>
+          <button class="day-btn" data-day="1">Mar</button>
+          <button class="day-btn" data-day="2">Mer</button>
+          <button class="day-btn" data-day="3">Gio</button>
+          <button class="day-btn" data-day="4">Ven</button>
+          <button class="day-btn" data-day="5">Sab</button>
+          <button class="day-btn" data-day="6">Dom</button>
+        </div>
+        <button id="btn-table-generate" class="btn btn-primary btn-block">🤖 Genera Tabella</button>
+        <p class="hint" id="table-status"></p>
+      </div>
+      <div id="table-container">
+      <div id="table-plan" class="card hidden">
+        <div class="workout-head">
+          <h3>📅 Microciclo</h3>
+          <button id="btn-table-sync-all" class="btn btn-primary tbl-syncall">📅 Sync tutto</button>
+        </div>
+        <p class="hint" id="table-meta"></p>
+        <div id="table-entries"></div>
+      </div>
+      </div>
+
+      <!-- STEP 3 · ALLENAMENTO OGGI & ADATTA SEDUTA -->
+      <div class="card step-card">
+        <div class="step-head"><span class="step-num">3</span><h2>📅 Allenamento Oggi & Adatta Seduta</h2></div>
+        <h3>Stato Garmin Calendar · Oggi</h3>
+        <div id="garmin-calendar-status">
+          <p class="hint">Caricamento calendario Garmin...</p>
+        </div>
+        <h3 style="margin-top:16px">🧠 Consiglio del Coach Adattivo</h3>
+        <div id="coach-advice">
+          <p class="hint">Caricamento consiglio...</p>
+        </div>
+      </div>
+
+      <!-- STEP 4 · GENERATORE MANUALE CUSTOM -->
+      <div class="card step-card">
+        <div class="step-head"><span class="step-num">4</span><h2>🎯 Generatore Manuale Custom</h2></div>
+        <p class="hint">Chiedi qualsiasi allenamento in linguaggio libero: il Coach lo genera e puoi caricarlo subito su Garmin.</p>
+        <textarea id="workout-request" rows="2" maxlength="1000"
+                  placeholder="Es. 6x1000m in Z4 con recupero 3'"></textarea>
+        <label class="toggle-row">
+          <input type="checkbox" id="workout-override">
+          <span>⚡ Forza override (procedi anche con Readiness bassa)</span>
+        </label>
+        <button id="btn-generate" class="btn btn-primary btn-block">🤖 Genera piano</button>
+        <div id="workout-result" class="hidden"></div>
+      </div>
+
+    </section>
+
+    <!-- ============ TAB INFORTUNI ============ -->
+    <section id="tab-injuries" class="tab">
+      <div class="card">
+        <h2>🩹 Injury Lab 3.0 · Fastidi muscolari</h2>
+        <p class="hint">Tocca una <b>Card Anatomica</b>: scegli la parte esatta (es. Ginocchio Destro, Tibia, Dita del Piede) e imposta la severità 🟡🟠🔴. Il Coach genera il <b>Referto Anatomico</b> e calcola l'<b>impatto % sulla corsa</b> (integrato con "Adatta Seduta").</p>
+        <div id="body-cards" class="body-cards"></div>
+        <div class="legend">
+          <span class="dot dot-1"></span> 1-2 lieve 🟡
+          <span class="dot dot-3"></span> 3 medio 🟠
+          <span class="dot dot-4"></span> 4-5 forte 🔴
+        </div>
+      </div>
+      <div id="injury-overview" class="card hidden"></div>
+      <div id="injuries-list" class="card"></div>
+    </section>
+
+    <!-- ============ TAB CHAT ============ -->
+    <section id="tab-chat" class="tab">
+      <div id="chat-log" class="chat-log"></div>
+      <div id="chat-actions" class="chat-actions hidden">
+        <button id="chat-override-yes" class="btn btn-warn">⚠️ Procedi comunque</button>
+        <button id="chat-override-no" class="btn btn-ghost">🧘 Meglio recuperare</button>
+      </div>
+      <div class="chat-input-row">
+        <input id="chat-input" type="text" maxlength="1000" placeholder="Chiedi al tuo coach..." autocomplete="off">
+        <button id="chat-send" class="btn btn-primary">➤</button>
+      </div>
+    </section>
+  </main>
+
+  <!-- Footer Privacy & GDPR -->
+  <footer class="app-footer">
+    <button id="privacy-btn" class="footer-link">🛡️ Consenso GDPR</button>
+    <button id="terms-btn" class="footer-link">📜 Termini &amp; Disclaimer</button>
+    <button id="privacy-policy-btn" class="footer-link">🔒 Privacy Policy</button>
+    <button id="cookies-btn" class="footer-link">🍪 Cookie Policy</button>
+    <button id="delete-account-btn" class="footer-link danger">🗑️ Elimina account</button>
+    <p class="creator-sign" id="creator-sign">Creato da <a href="https://instagram.com/riccardocentofanti_" target="_blank" rel="noopener">Riccardo Centofanti (@riccardocentofanti_)</a></p>
+  </footer>
+
+  <nav class="bottom-nav">
+    <button class="nav-btn active" data-tab="readiness"><span class="nav-ico">📊</span><span>Readiness</span></button>
+    <button class="nav-btn" data-tab="workout"><span class="nav-ico">🏃</span><span>Allenamento</span></button>
+    <button class="nav-btn" data-tab="injuries"><span class="nav-ico">🩹</span><span>Infortuni</span></button>
+    <button class="nav-btn" data-tab="chat"><span class="nav-ico">💬</span><span>Coach</span></button>
+  </nav>
+
+  <!-- Modal aggiunta/modifica fastidio (Card Anatomica: parte esatta + severità) -->
+  <div id="modal" class="modal hidden">
+    <div class="modal-box">
+      <h3 id="modal-title">Segnala fastidio</h3>
+      <p id="modal-card" class="hint"></p>
+      <label class="modal-step">1 · Scegli la parte esatta</label>
+      <div id="modal-parts" class="part-grid"></div>
+      <p id="modal-part" class="hint"></p>
+      <label class="modal-step">2 · Severità (1-5)</label>
+      <div id="severity-picker" class="severity-picker">
+        <button data-s="1">🟡 1</button><button data-s="2">🟡 2</button><button data-s="3">🟠 3</button>
+        <button data-s="4">🔴 4</button><button data-s="5">🔴 5</button>
+      </div>
+      <label class="modal-step">3 · Nota (opzionale)</label>
+      <textarea id="modal-note" rows="2" maxlength="300" placeholder="Es. dolore al polpaccio dopo le ripetute"></textarea>
+      <div class="modal-actions">
+        <button id="modal-delete" class="btn btn-danger hidden">🗑️ Rimuovi</button>
+        <button id="modal-cancel" class="btn btn-ghost">Annulla</button>
+        <button id="modal-save" class="btn btn-primary">Salva</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal discrepanza Readiness vs Tabella (controllo adattivo giornaliero) -->
+  <div id="adapt-modal" class="modal hidden">
+    <div class="modal-box">
+      <h3>⚠️ Discrepanza: Readiness vs Tabella</h3>
+      <p id="adapt-msg" class="hint"></p>
+      <div class="modal-actions">
+        <button id="adapt-btn" class="btn btn-primary">🔄 Adatta Allenamento di Oggi</button>
+        <button id="override-btn" class="btn btn-warn">⚡️ Mantieni Originale (Override)</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal Adatta Seduta: cambiamenti consigliati dal Coach (opzionali) -->
+  <div id="advice-modal" class="modal hidden">
+    <div class="modal-box">
+      <h3 id="advice-modal-title">🧠 Cambiamenti Consigliati dal Coach (Opzionali)</h3>
+      <p class="hint">Seduta di oggi: <b id="advice-modal-name"></b></p>
+      <div id="advice-modal-detail" class="hint"></div>
+      <div class="modal-actions">
+        <button id="advice-apply-btn" class="btn btn-primary">🔄 Applica Modifica Consigliata</button>
+        <button id="advice-keep-btn" class="btn btn-ghost">❌ Mantieni Originale</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal Informativa Privacy / Consenso GDPR (primo onboarding) -->
+  <div id="privacy-modal" class="modal hidden">
+    <div class="modal-box">
+      <h3 class="modal-title">🛡️ Informativa Privacy &amp; Consenso (GDPR)</h3>
+      <div class="privacy-body">
+        <p><b>MyPTAI</b> — Coach personale basato sui dati reali Garmin.</p>
+        <p>Per fornirti il coaching, il server elabora i tuoi dati biometrici Garmin
+        (Readiness, sonno, HRV, Body Battery, corse) e li conserva in forma
+        pseudonimizzata. I dati non vengono ceduti a terzi; il modello AI riceve
+        solo una sintesi numerica per generare gli allenamenti.</p>
+        <p class="hint">I tuoi diritti (Art. 15-22 GDPR): accesso, rettifica,
+        <b>cancellazione (Art. 17)</b>, portabilità, limitazione, opposizione e
+        reclamo al Garante. Puoi eliminare account e dati in qualsiasi momento
+        dal footer dell'app.</p>
+      </div>
+      <label class="privacy-consent">
+        <input type="checkbox" id="privacy-check">
+        <span>☑️ Ho letto ed accetto i <a href="#" data-legal="terms">Termini di Servizio</a>, l'<a href="#" data-legal="privacy">Informativa Privacy (GDPR)</a> ed il <a href="#" data-legal="terms">Disclaimer Medico</a>.</span>
+      </label>
+      <div class="modal-actions">
+        <button id="privacy-accept" class="btn btn-primary" disabled>✅ Accetto e continua</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal conferma eliminazione account (Diritto all'oblio, Art. 17 GDPR) -->
+  <div id="delete-modal" class="modal hidden">
+    <div class="modal-box">
+      <h3>🗑️ Elimina account e dati</h3>
+      <div class="privacy-body">
+        <p>Questa azione cancella <b>definitivamente</b> dal server: infortuni,
+        obiettivo di gara, tabella allenamenti, piani generati e consenso
+        (Diritto all'oblio, Art. 17 GDPR). L'operazione è <b>irreversibile</b>.</p>
+        <p class="hint">Verranno revocate tutte le sessioni su tutti i tuoi dispositivi.</p>
+      </div>
+      <div class="modal-actions">
+        <button id="delete-cancel" class="btn btn-ghost">Annulla</button>
+        <button id="delete-confirm" class="btn btn-danger">🗑️ Elimina definitivamente</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal documenti legali consultabili (Termini / Privacy / Cookie) -->
+  <div id="legal-modal" class="modal hidden">
+    <div class="modal-box">
+      <h3 id="legal-title" class="modal-title">Documento</h3>
+      <div id="legal-content" class="privacy-body legal-scroll"></div>
+      <div class="modal-actions">
+        <button id="legal-close" class="btn btn-ghost">Chiudi</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal Gestione Account: profilo attivo, switch 1-tap, nuovo account, logout -->
+  <div id="account-modal" class="modal hidden">
+    <div class="modal-box acct-box">
+      <div class="acct-head">
+        <h3>👤 Gestione Account</h3>
+        <button id="acct-close-btn" class="acct-x" aria-label="Chiudi" title="Chiudi">✕</button>
+      </div>
+      <!-- a) Card Profilo Attivo (Email · Nome · VO2max dell utente connesso) -->
+      <div class="acct-active">
+        <div class="acct-active-ico">🏃</div>
+        <div class="acct-active-info">
+          <div class="acct-active-name" id="acct-active-name">—</div>
+          <div class="acct-active-mail" id="acct-active-email">—</div>
+          <div class="acct-active-vo2">VO₂max <b id="acct-active-vo2">—</b></div>
+        </div>
+      </div>
+      <!-- b) Account salvati sul dispositivo: cambio rapido in 1 tap -->
+      <label class="modal-step">🔄 I Tuoi Account</label>
+      <div id="acct-list" class="acct-list"></div>
+      <!-- c) Collega un secondo account Garmin -->
+      <button id="acct-add-btn" class="btn btn-ghost btn-block acct-btn">➕ Collega Nuovo Account Garmin</button>
+      <!-- d) Logout: pulisce la sessione e torna alla schermata di login -->
+      <button id="acct-logout-btn" class="btn btn-danger btn-block acct-btn">🚪 Disconnetti / Esci</button>
+    </div>
+  </div>
+
+  <div id="toast" class="toast hidden"></div>
+
+  <script src="/js/app.js?v=92"></script>
+</body>
+</html>

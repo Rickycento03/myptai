@@ -1,0 +1,38 @@
+{
+  "name": "MyPTAI — Coach personale · dati reali Garmin",
+  "short_name": "MyPTAI",
+  "description": "Coach di corsa AI basato sui dati reali Garmin: Readiness, allenamenti con sync One-Tap, monitoraggio infortuni e obiettivo di gara.",
+  "id": "/",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0d1420",
+  "theme_color": "#0d1420",
+  "lang": "it",
+  "categories": ["health", "fitness", "sports"],
+  "icons": [
+    {
+      "src": "/img/logo.svg?v=92",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Readiness di oggi",
+      "short_name": "Readiness",
+      "description": "Apri la Readiness del giorno",
+      "url": "/#readiness",
+      "icons": [{ "src": "/img/logo.svg?v=92", "sizes": "any" }]
+    },
+    {
+      "name": "Genera allenamento",
+      "short_name": "Allenamento",
+      "description": "Genera e sincronizza un allenamento",
+      "url": "/#workout",
+      "icons": [{ "src": "/img/logo.svg?v=92", "sizes": "any" }]
+    }
+  ]
+}

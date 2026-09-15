@@ -1,0 +1,28 @@
+{
+  "garmin": {
+    "email": "your_email@gmail.com",
+    "password": "your_password",
+    "tokenstore_path": "~/.garminconnect_session"
+  },
+  "telegram": {
+    "bot_token": "YOUR_TELEGRAM_BOT_TOKEN",
+    "allowed_chat_ids": []
+  },
+  "deepseek": {
+    "api_key": "YOUR_DEEPSEEK_API_KEY",
+    "model": "deepseek-v4-flash",
+    "base_url": "https://api.deepseek.com"
+  },
+  "athlete": {
+    "name": "Athlete",
+    "age": 25,
+    "weight_kg": 75,
+    "height_cm": 180,
+    "max_hr": 195,
+    "lactate_threshold_hr": 172,
+    "threshold_pace_sec_per_km": 285,
+    "threshold_pace_display": "4:45 min/km",
+    "rhr_baseline": 50,
+    "baseline_vo2max": 54.0
+  }
+}

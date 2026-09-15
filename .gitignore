@@ -1,0 +1,35 @@
+# Environment & Secrets
+.env
+*.env
+*.key
+*.key.pub
+config.json
+secret.key
+
+# Garmin sessions & dumps
+.garminconnect*
+garmin_raw_dump.json
+data/
+data/dumps/
+data/users/
+data/myptai.db
+data/secret.key
+data/sessions.json
+data/goals.json
+data/injuries.json
+data/table_plan.json
+workout_plan.json
+analytics_summary.json
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+.venv/
+env/
+
+# OS / IDE
+.DS_Store
+.vscode/
+.idea/

@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 650 180" width="650" height="180">
+  <rect width="100%" height="100%" fill="#0d1420" rx="24" />
+  <defs>
+    <linearGradient id="neonGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#22c55e"/>
+      <stop offset="50%" stop-color="#10b981"/>
+      <stop offset="100%" stop-color="#00d2ff"/>
+    </linearGradient>
+    <filter id="neonGlow" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="4" result="blur" />
+      <feComposite in="SourceGraphic" in2="blur" operator="over" />
+    </filter>
+  </defs>
+
+  <!-- ULTRA-COOL FUTURISTIC M+Y INTERTWINED PULSE EMBLEM -->
+  <g transform="translate(35, 25)" filter="url(#neonGlow)">
+    <!-- Outer Shield / Hex Glow Background -->
+    <rect x="5" y="5" width="120" height="120" rx="24" fill="#131b2e" stroke="url(#neonGrad)" stroke-width="2.5" stroke-opacity="0.4" />
+    
+    <!-- Iconic Intertwined M + Y Athletic Cardiac Pulse Vector -->
+    <!-- M Left Leg -->
+    <path d="M 32 105 L 32 38 L 65 82 L 98 38 L 98 105" fill="none" stroke="url(#neonGrad)" stroke-width="11" stroke-linecap="round" stroke-linejoin="round" />
+    
+    <!-- Y Intertwined Center Cardiac Pulse Wave Loop -->
+    <path d="M 65 82 L 65 116 C 65 130 50 132 40 122 C 34 116 38 106 48 108 L 62 110" fill="none" stroke="url(#neonGrad)" stroke-width="8" stroke-linecap="round" stroke-linejoin="round" />
+  </g>
+
+  <!-- Clean Bold Typography: MyPTAI -->
+  <g transform="translate(180, 118)">
+    <text font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Display', Roboto, 'Segoe UI', sans-serif" font-weight="900" font-size="76" fill="#FFFFFF" letter-spacing="-1.5">My<tspan fill="url(#neonGrad)">PTAI</tspan></text>
+  </g>
+</svg>

@@ -1,0 +1,25 @@
+[Unit]
+Description=Garmin AI Coach - Web API + PWA (FastAPI)
+Documentation=https://github.com/rickycento03/garmin-ai-coach-bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Stesso utente del bot (ubuntu): condivide il tokenstore Garmin
+# (/home/ubuntu/.garminconnect_session_r_centofanti03_gmail_com) e la scrittura
+# su /opt/garmin-ai-coach-bot (workout_plan.json, garmin_raw_dump.json, data/).
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/opt/garmin-ai-coach-bot
+# Bind su 127.0.0.1: nginx (HTTPS) fa da reverse proxy verso questa porta
+ExecStart=/opt/garmin-ai-coach-bot/venv/bin/python -m uvicorn src.web_server:app --host 127.0.0.1 --port 8000
+Restart=always
+RestartSec=10
+# Log strutturati su journald
+StandardOutput=journal
+StandardError=journal
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target
