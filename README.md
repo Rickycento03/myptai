@@ -91,10 +91,11 @@ copertura della nuova API. Il report stampa gli esiti del confronto senza
 mostrare valori biometrici, credenziali o dati grezzi.
 
 Genera la chiave dalle impostazioni di Garmin Connect Web, nella sezione
-**Chiave API personale**. Esegui dal repository con un dump recente:
+**Chiave API personale**. Il client ufficiale richiede Python 3.12 o successivo.
+Esegui dal repository con un dump recente:
 
 ```bash
-python3 -m venv .venv
+python3.12 -m venv .venv
 . .venv/bin/activate
 python -m pip install garmin-connect-personal-api-python garmin-fit-sdk
 python src/garmin_personal_probe.py --dump garmin_raw_dump.json
