@@ -419,7 +419,8 @@ class AnalyticsEngine:
             if field == "sleepTimeSeconds":
                 v = (s.get("dailySleepDTO") or {}).get("sleepTimeSeconds")
             else:  # sleepScores.overall.value
-                v = ((s.get("sleepScores") or {}).get("overall") or {}).get("value")
+                scores = (s.get("dailySleepDTO") or {}).get("sleepScores") or s.get("sleepScores")
+                v = ((scores or {}).get("overall") or {}).get("value")
             if v is not None:
                 vals.append(float(v))
         return vals
