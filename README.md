@@ -81,3 +81,30 @@ graph TD
 ## 📄 Licenza
 
 Distribuito sotto licenza MIT.
+
+## Prova Garmin Connect Personal API
+
+Questa prova confronta sette giorni di Sleep Score, HRV e Body Battery con un
+dump MyPTAI dello stesso account. Il dump attuale contiene HRV e Body Battery
+solo per la data di estrazione e quella precedente. Le altre date mostrano la
+copertura della nuova API. Il report stampa gli esiti del confronto senza
+mostrare valori biometrici, credenziali o dati grezzi.
+
+Genera la chiave dalle impostazioni di Garmin Connect Web, nella sezione
+**Chiave API personale**. Esegui dal repository con un dump recente:
+
+```bash
+python3 -m venv .venv
+. .venv/bin/activate
+python -m pip install garmin-connect-personal-api-python garmin-fit-sdk
+python src/garmin_personal_probe.py --dump garmin_raw_dump.json
+```
+
+La chiave viene chiesta in modo interattivo senza mostrarla. In un ambiente
+già configurato puoi usare la variabile `GARMIN_PERSONAL_API_KEY`. Per un
+dump per utente indica il file corrispondente in `data/dumps/`. Per confrontare
+anche il numero di lap di una corsa, aggiungi `--activity-id ID`, usando l'ID
+della corsa presente nel dump. Il client ufficiale conserva la cache del token
+nel profilo dell'utente. La prova legge dati e non modifica calendario, dump o
+database. FC e passo di soglia, Training Status e carico EPOC richiedono una
+verifica separata.
