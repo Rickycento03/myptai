@@ -269,7 +269,7 @@ def sync_state_from_biometrics(summary: Dict[str, Any], user_email: Optional[str
             "hrv_weekly_avg_ms": bio.get("hrv_weekly") or bio.get("hrv_7n") or 60,
             "hrv_baseline_range": "54-115",
             "fc_riposo_odierna": bio.get("rhr") or rhr,
-            "tempo_recupero_consigliato_ore": 0 if readiness.get("readiness_score", 50) > 60 else 24
+            "tempo_recupero_consigliato_ore": 0 if (readiness.get("readiness_score") or 0) > 60 else 24
         }
     }
 

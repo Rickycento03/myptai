@@ -18,8 +18,10 @@ Output: analytics_summary.json (per FASE 3) + contesto stampato a schermo.
 
 import json
 import re
+from math import isfinite
+from statistics import median
 from typing import Optional
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -27,8 +29,9 @@ CONFIG_PATH = PROJECT_ROOT / "config.json"
 DUMP_PATH = PROJECT_ROOT / "garmin_raw_dump.json"
 OUTPUT_PATH = PROJECT_ROOT / "analytics_summary.json"
 
-# Pesi delle componenti della Readiness (somma = 1.0)
-W_HRV, W_SLEEP, W_BB, W_REST = 0.35, 0.30, 0.20, 0.15
+READINESS_WEIGHTS = {"hrv": 0.35, "sleep": 0.30, "body_battery": 0.20, "rest": 0.15}
+READINESS_MIN_COVERAGE = 0.50
+RHR_MIN_DAYS = 14
 
 # ---------------------------------------------------------------------------
 # MAPPATURA ESATTA ZONE GARMIN DI RICCARDO (da AGENTS.md / screenshot Garmin):
@@ -48,6 +51,32 @@ ATHLETE_ZONE_TARGETS = {
 
 def clamp(value, lo=0.0, hi=100.0):
     return max(lo, min(hi, value))
+
+
+def _garmin_number(value, minimum=0, maximum=float("inf")):
+    if (type(value) in (int, float) and isfinite(value)
+            and minimum <= value <= maximum):
+        return value
+    return None
+
+
+def body_battery_values(reports, day=None) -> list:
+    """Restituisce i campioni validi della giornata in ordine cronologico."""
+    if not isinstance(reports, list):
+        return []
+    readings = []
+    for report in reports:
+        if not isinstance(report, dict) or (day and report.get("date") not in (None, day)):
+            continue
+        for sample in report.get("bodyBatteryValuesArray") or []:
+            if not isinstance(sample, (list, tuple)) or len(sample) < 2:
+                continue
+            stamp = _garmin_number(sample[0])
+            value = _garmin_number(sample[1], maximum=100)
+            if stamp is not None and value is not None:
+                readings.append((stamp, value))
+    readings.sort(key=lambda reading: reading[0])
+    return [value for _, value in readings]
 
 
 def workout_duration_with_recovery_s(workout) -> float:
@@ -164,31 +193,35 @@ class AnalyticsEngine:
             self.athlete["baseline_vo2max"] = vo2
 
     def _thresholds_from_user_settings(self):
-        """Soglie UFFICIALI Garmin da user_settings.userData (qualsiasi utente):
-        lactateThresholdHeartRate (bpm) e lactateThresholdSpeed (payload in
-        0.1 m/s -> convertito in sec/km M:SS). Ritorna (lthr, pace_sec_km)."""
+        """Restituisce la soglia Garmin in bpm e il passo in secondi per km."""
         us = (self._ep("user_settings") or {}).get("userData") or {}
-        lthr = us.get("lactateThresholdHeartRate")
-        pace = None
-        speed = us.get("lactateThresholdSpeed")
-        if speed:
-            pace = 1000.0 / float(speed)          # ipotesi m/s
-            if pace < 60 or pace > 1000:          # irrealistico: payload in 0.1 m/s
-                pace = 1000.0 / (float(speed) * 10.0)
-        return (int(lthr) if lthr else None), pace
+        heart_rate = _garmin_number(us.get("lactateThresholdHeartRate"), minimum=1)
+        bpm = int(heart_rate) if heart_rate is not None else None
+        speed = _garmin_number(us.get("lactateThresholdSpeed"))
+        if not speed:
+            return bpm, None
+        # Il profilo Garmin può esprimere 3,611 m/s come 0,3611.
+        speed_m_s = speed * 10 if speed < 1 else speed
+        pace = _garmin_number(1000 / speed_m_s, minimum=60, maximum=1000)
+        return bpm, pace
 
-    def _vo2max_real(self) -> float:
-        """VO2Max reale Garmin dell'utente: training_status (es. 54.1) oppure
-        user_settings.vo2MaxRunning (es. 54.0)."""
+    def _vo2max_real(self, *, for_display: bool = False) -> Optional[float]:
+        """Legge solo VO₂max di corsa. La schermata usa il valore visualizzato da Garmin."""
+        latest = self._ep("max_metrics_latest")
         ts = self._ep("training_status_today") or {}
-        vo2 = ((ts.get("mostRecentVO2Max") or {}).get("generic") or {})
-        v = vo2.get("vo2MaxPreciseValue") or vo2.get("vo2MaxValue")
-        if v:
-            return float(v)
+        records = (
+            latest.get("generic") if isinstance(latest, dict) else None,
+            (ts.get("mostRecentVO2Max") or {}).get("generic"),
+        )
+        for record in records:
+            if isinstance(record, dict):
+                displayed = _garmin_number(record.get("vo2MaxValue"), minimum=1)
+                precise = _garmin_number(record.get("vo2MaxPreciseValue"), minimum=1)
+                value = (displayed or precise) if for_display else (precise or displayed)
+                if value is not None:
+                    return float(value)
         us = (self._ep("user_settings") or {}).get("userData") or {}
-        if us.get("vo2MaxRunning"):
-            return float(us["vo2MaxRunning"])
-        return None
+        return _garmin_number(us.get("vo2MaxRunning"), minimum=1)
 
     def _vdot_threshold_pace(self, vo2max: float):
         """Passo Soglia (sec/km) dal VO2max con modello fisiologico VDOT:
@@ -247,9 +280,7 @@ class AnalyticsEngine:
         max_hr = int(self.athlete.get("max_hr") or 200)
         rhr = int(self.athlete.get("rhr_baseline") or 50)
         # Se presente RHR live o dal summary lo consideriamo per la riserva
-        rhr_rows = (self._ep("rhr_today") or {}).get("allMetrics", {}).get("metricsMap", {}).get("WELLNESS_RESTING_HEART_RATE", [])
-        if rhr_rows and rhr_rows[0].get("value"):
-            rhr = int(rhr_rows[0]["value"])
+        rhr = int(self._resting_heart_rate() or rhr)
         hrr = max(1, max_hr - rhr)
 
         return {
@@ -342,17 +373,29 @@ class AnalyticsEngine:
         """
         bio = summary.get("biometria", {})
         readiness = summary.get("readiness", {})
-        r_level = readiness.get("readiness_level", "AMBER")
-        r_score = readiness.get("readiness_score", 50)
+        r_level = readiness.get("readiness_level")
+        r_score = readiness.get("readiness_score")
+        if r_score is None:
+            return {
+                "decision": "INSUFFICIENT_DATA",
+                "status": "INSUFFICIENT_DATA",
+                "card_title": "Dati di recupero insufficienti",
+                "explanation": "Aggiorna Garmin per completare le misure di oggi.",
+                "action": "",
+                "target_zone": None,
+                "max_hr": None,
+            }
         hrv_status = bio.get("hrv_status", "BALANCED")
         bb = bio.get("body_battery_attuale", 50) or 50
         sleep_score = bio.get("sleep_score", 70) or 70
         sleep_h = bio.get("sonno_h", 7.0) or 7.0
-        rhr = bio.get("rhr", 50) or 50
-        rhr_base = (summary.get("atleta", {}) or {}).get("fc_riposo_baseline", 50) or 50
+        rhr = bio.get("rhr")
+        rhr_base = (readiness.get("rhr_reference") or {}).get("baseline_bpm")
+        if rhr_base is None:
+            rhr_base = (summary.get("atleta") or {}).get("fc_riposo_baseline")
 
         # Controllo Regola 1: Riposo Assoluto
-        if hrv_status == "LOW" and bb < 35 and rhr > (rhr_base + 5):
+        if hrv_status == "LOW" and bb < 35 and rhr is not None and rhr_base is not None and rhr > rhr_base + 5:
             return {
                 "decision": "REST_TOTAL",
                 "status": "DANGER_FATIGUE",
@@ -376,7 +419,7 @@ class AnalyticsEngine:
             }
 
         # Controllo Regola 3: Conferma Seduta Chiave
-        if hrv_status == "BALANCED" and bb >= 60 and sleep_h >= 6.8:
+        if not readiness.get("estimated") and hrv_status == "BALANCED" and bb >= 60 and sleep_h >= 6.8:
             return {
                 "decision": "CONFIRM_KEY",
                 "status": "OPTIMAL_FORM",
@@ -407,28 +450,47 @@ class AnalyticsEngine:
     def _ep(self, name):
         return self.eps.get(name, {}).get("data")
 
+    def _sleep_today(self) -> dict:
+        sleep = (self._ep("sleep_today") or {}).get("dailySleepDTO") or {}
+        if self.dump.get("timestamp") and sleep.get("calendarDate") not in (None, self.dump["timestamp"]):
+            return {}
+        return sleep
+
+    def _hrv_today(self) -> dict:
+        hrv = (self._ep("hrv_today") or {}).get("hrvSummary") or {}
+        if self.dump.get("timestamp") and hrv.get("calendarDate") not in (None, self.dump["timestamp"]):
+            return {}
+        return hrv
+
+    def _resting_heart_rate(self):
+        metrics = ((self._ep("rhr_today") or {}).get("allMetrics") or {}).get("metricsMap") or {}
+        rows = metrics.get("WELLNESS_RESTING_HEART_RATE") or []
+        return _garmin_number(rows[0].get("value"), minimum=1) if rows else None
+
     # ------------------------------------------------------------------ medie 7 notti
     def _sleep_day_vals(self, field: str, days: int = 7) -> list:
         """Valori del campo per ciascuna delle ultime N notti estratte dal probe
         (endpoint sleep_day_<ISO>). Ritorna lista dei soli valori reali presenti."""
-        from datetime import date, timedelta
         vals = []
+        dump_date = self.dump.get("timestamp")
+        end_date = date.fromisoformat(dump_date) if dump_date else date.today()
         for i in range(days):
-            key = f"sleep_day_{(date.today() - timedelta(days=i)).isoformat()}"
-            s = self._ep(key) or {}
+            night = (end_date - timedelta(days=i)).isoformat()
+            s = self._ep(f"sleep_day_{night}")
+            if not s and i < 2:
+                s = self._ep("sleep_today" if i == 0 else "sleep_yesterday")
+            s = s or {}
+            daily = s.get("dailySleepDTO") or {}
+            if daily.get("calendarDate") not in (None, night):
+                continue
             if field == "sleepTimeSeconds":
-                v = (s.get("dailySleepDTO") or {}).get("sleepTimeSeconds")
+                v = _garmin_number(daily.get("sleepTimeSeconds"), minimum=1)
             else:  # sleepScores.overall.value
-                scores = (s.get("dailySleepDTO") or {}).get("sleepScores") or s.get("sleepScores")
-                v = ((scores or {}).get("overall") or {}).get("value")
+                scores = daily.get("sleepScores") or s.get("sleepScores") or {}
+                v = _garmin_number((scores.get("overall") or {}).get("value"), maximum=100)
             if v is not None:
-                vals.append(float(v))
+                vals.append(v)
         return vals
-
-    def sonno_7n_media(self) -> Optional[float]:
-        """Media ore di sonno degli ultimi 7 giorni (reale, dal probe)."""
-        vals = self._sleep_day_vals("sleepTimeSeconds")
-        return round(sum(vals) / len(vals) / 3600.0, 2) if vals else None
 
     def sleep_score_7n_media(self) -> Optional[float]:
         """Media Sleep Score (overall) degli ultimi 7 giorni (reale, dal probe)."""
@@ -449,111 +511,142 @@ class AnalyticsEngine:
         return "Z5" if hr > zones["z5_vo2max"]["bpm"][0] else "Z1"
 
     # ===================================================== 1. READINESS SCORE
-    def hrv_component(self) -> float:
-        """Score HRV: posizione dell'HRV notturno rispetto alla banda baseline.
+    def _personal_hrv_band(self) -> Optional[tuple]:
+        baseline = self._hrv_today().get("baseline")
+        if not isinstance(baseline, dict):
+            return None
+        low, lower, upper = (
+            _garmin_number(baseline.get(key), minimum=1)
+            for key in ("lowUpper", "balancedLow", "balancedUpper")
+        )
+        if None in (low, lower, upper) or not low <= lower <= upper:
+            return None
+        return low, lower, upper
 
-        < lowUpper (49)  -> 0  (recupero insufficiente)
-        lowUpper..balancedLow -> rampa 0-100
-        >= balancedLow  -> 100 (in banda o sopra)
-        Media settimanale pesata al 30% per smorzare i picchi.
-        """
-        hrv = self._ep("hrv_today") or {}
-        summary = hrv.get("hrvSummary", {})
-        last = summary.get("lastNightAvg")
-        weekly = summary.get("weeklyAvg")
-        base = summary.get("baseline", {})
-        low_upper = base.get("lowUpper", 49)
-        balanced_low = base.get("balancedLow", 58)
+    def hrv_component(self) -> Optional[float]:
+        """Valuta notte e media settimanale rispetto alla fascia personale Garmin."""
+        summary = self._hrv_today()
+        last = _garmin_number(summary.get("lastNightAvg"), minimum=1)
+        weekly = _garmin_number(summary.get("weeklyAvg"), minimum=1)
+        band = self._personal_hrv_band()
+        if band is None or last is None or weekly is None:
+            return None
+        low, lower, upper = band
 
-        def _norm(v):
-            if v is None:
-                return 50.0
-            if v <= low_upper:
-                return 0.0
-            if v >= balanced_low:
+        def score_from_lower_bound(value):
+            if value >= lower:
                 return 100.0
-            return clamp((v - low_upper) / max(1, balanced_low - low_upper) * 100.0)
+            return clamp((value - low) / max(1, lower - low) * 100)
 
-        return round(0.7 * _norm(last) + 0.3 * _norm(weekly), 1)
+        weekly_score = score_from_lower_bound(weekly)
+        # Un picco isolato resta nel punteggio notturno. La media settimanale
+        # sopra la fascia perde gradualmente punti sulla scala della fascia stessa.
+        if weekly > upper:
+            weekly_score = clamp(100 * (1 - (weekly - upper) / max(1, upper - lower)))
+        return round(0.7 * score_from_lower_bound(last) + 0.3 * weekly_score, 1)
 
-    def sleep_component(self) -> float:
+    def _sleep_score(self) -> Optional[float]:
+        scores = self._sleep_today().get("sleepScores") or {}
+        return _garmin_number((scores.get("overall") or {}).get("value"), maximum=100)
+
+    def sleep_component(self) -> Optional[float]:
         """Score sonno: usa lo Sleep Score Garmin (0-100); fallback su durata."""
-        sleep = self._ep("sleep_today") or {}
-        ds = sleep.get("dailySleepDTO", {})
-        scores = ds.get("sleepScores", {})
-        overall = (scores.get("overall") or {}).get("value")
+        overall = self._sleep_score()
         if overall is not None:
-            return clamp(float(overall))
-        # Fallback: durata vs 8h (28800s) con penalità per stress notturno
-        duration = ds.get("sleepTimeSeconds", 0)
+            return float(overall)
+        duration = _garmin_number(self._sleep_today().get("sleepTimeSeconds"), minimum=1)
+        if duration is None:
+            return None
         dur_score = clamp(duration / 28800.0 * 100.0)
-        stress_pen = clamp(float(ds.get("avgSleepStress", 0)))
-        return round(0.7 * dur_score + 0.3 * (100 - stress_pen), 1)
+        rest = self.rest_component()
+        return round(0.7 * dur_score + 0.3 * rest if rest is not None else dur_score, 1)
 
-    def body_battery_component(self) -> float:
-        """Score Body Battery: media tra picco massimo e valore attuale (5-100)."""
-        bb = self._ep("body_battery_today") or []
-        if not bb or not isinstance(bb, list):
-            return 50.0
-        values = [v[1] for v in (bb[0].get("bodyBatteryValuesArray") or []) if len(v) > 1]
+    def _body_battery_values(self) -> list:
+        return body_battery_values(self._ep("body_battery_today"), self.dump.get("timestamp"))
+
+    def body_battery_component(self) -> Optional[float]:
+        """Score Body Battery: 70% valore attuale, 30% picco giornaliero."""
+        values = self._body_battery_values()
         if not values:
-            return 50.0
+            return None
         peak, current = max(values), values[-1]
 
         def _norm(v):
             return clamp((v - 5.0) / 95.0 * 100.0)
 
-        return round(0.5 * _norm(peak) + 0.5 * _norm(current), 1)
+        return round(0.7 * _norm(current) + 0.3 * _norm(peak), 1)
 
-    def rest_component(self) -> float:
+    def rest_component(self) -> Optional[float]:
         """Score riposo: 100 - stress notturno medio (avgSleepStress 0-100)."""
-        sleep = self._ep("sleep_today") or {}
-        ds = sleep.get("dailySleepDTO", {})
-        stress = ds.get("avgSleepStress")
+        stress = _garmin_number(self._sleep_today().get("avgSleepStress"), maximum=100)
         if stress is None:
-            return 60.0
+            return None
         return round(clamp(100.0 - float(stress)), 1)
 
-    def rhr_adjustment(self) -> float:
-        """Penalità se RHR è elevato rispetto alla baseline dell'atleta."""
-        rhr = self._ep("rhr_today") or {}
-        metrics = (rhr.get("allMetrics") or {}).get("metricsMap", {})
-        rows = metrics.get("WELLNESS_RESTING_HEART_RATE", [])
-        rhr_val = rows[0].get("value") if rows else None
-        if rhr_val is None:
-            return 0.0
-        baseline = self.athlete.get("rhr_baseline", 50)
-        if rhr_val <= baseline:
-            return 0.0
-        return clamp((rhr_val - baseline) * 8.0, 0, 20)  # max -20 punti
+    def _rhr_reference(self) -> dict:
+        """Mediana e oscillazione abituale sulle misure dei 28 giorni precedenti."""
+        day = self.dump.get("timestamp")
+        end = date.fromisoformat(day) if day else date.today()
+        start = (end - timedelta(days=28)).isoformat()
+        rows = self._ep("rhr_history")
+        by_day = {}
+        for row in rows if isinstance(rows, list) else []:
+            if not isinstance(row, dict):
+                continue
+            day = row.get("calendarDate")
+            values = row.get("values") or {}
+            if isinstance(day, str) and start <= day < end.isoformat() and isinstance(values, dict):
+                rhr = _garmin_number(values.get("restingHR"), minimum=1)
+                if rhr is not None:
+                    by_day[day] = rhr
+
+        count = len(by_day)
+        reference = {"days": count, "min_days": RHR_MIN_DAYS, "baseline_bpm": None, "tolerance_bpm": None}
+        if count >= RHR_MIN_DAYS:
+            baseline = median(by_day.values())
+            mad = median(abs(value - baseline) for value in by_day.values())
+            reference.update(baseline_bpm=baseline, tolerance_bpm=max(2, 2 * mad))
+        return reference
+
+    def _rhr_adjustment(self, reference: dict) -> Optional[float]:
+        """Sottrae 2 punti per bpm oltre la variazione abituale, fino a 20."""
+        rhr_val = self._resting_heart_rate()
+        baseline = reference["baseline_bpm"]
+        if rhr_val is None or baseline is None:
+            return None
+        return clamp((rhr_val - baseline - reference["tolerance_bpm"]) * 2, 0, 20)
 
     def compute_readiness(self) -> dict:
-        """Readiness Score 0-100 con componenti e livello (RED/AMBER/GREEN)."""
-        hrv = self.hrv_component()
-        sleep = self.sleep_component()
-        bb = self.body_battery_component()
-        rest = self.rest_component()
-        score = clamp(W_HRV * hrv + W_SLEEP * sleep + W_BB * bb + W_REST * rest)
-        score = clamp(score - self.rhr_adjustment())
+        """Readiness su 100, usando i componenti disponibili e i loro pesi relativi."""
+        components = {
+            "hrv": self.hrv_component(),
+            "sleep": self.sleep_component(),
+            "body_battery": self.body_battery_component(),
+            "rest": self.rest_component(),
+        }
+        available = {key: weight for key, weight in READINESS_WEIGHTS.items() if components[key] is not None}
+        coverage = sum(available.values())
+        reference = self._rhr_reference()
+        penalty = self._rhr_adjustment(reference)
+        score = level = None
+        weights = {}
+        if coverage >= READINESS_MIN_COVERAGE:
+            weights = {key: weight / coverage for key, weight in available.items()}
+            score = clamp(sum(weights[key] * components[key] for key in weights) - (penalty or 0))
+            level = "GREEN" if score >= 67 else "AMBER" if score >= 34 else "RED"
 
-        if score >= 67:
-            level = "GREEN"
-        elif score >= 34:
-            level = "AMBER"
-        else:
-            level = "RED"
-
+        estimated = score is not None and (
+            len(available) < len(READINESS_WEIGHTS) or penalty is None or self._sleep_score() is None
+        )
         return {
-            "readiness_score": round(score, 1),
+            "readiness_score": round(score, 1) if score is not None else None,
             "readiness_level": level,
-            "components": {
-                "hrv": hrv,
-                "sleep": sleep,
-                "body_battery": bb,
-                "rest": rest,
-            },
-            "rhr_adjustment_penalty": round(self.rhr_adjustment(), 1),
-            "weights": {"hrv": W_HRV, "sleep": W_SLEEP, "body_battery": W_BB, "rest": W_REST},
+            "estimated": estimated,
+            "components": components,
+            "hrv_calibrating": self._personal_hrv_band() is None,
+            "rhr_reference": reference,
+            "rhr_adjustment_penalty": round(penalty, 1) if penalty is not None else None,
+            "weights": weights,
         }
 
     # ===================================================== 2. CLASSIFICAZIONE LAP
@@ -714,9 +807,7 @@ class AnalyticsEngine:
         """Confronta baseline dell'utente connesso (FC Max/FC Soglia/Passo/VO2Max
         dinamici, dal config per l'owner o stimati dal dump per i secondari)
         con i valori osservati nei dati reali."""
-        ts = self._ep("training_status_today") or {}
-        vo2 = ((ts.get("mostRecentVO2Max") or {}).get("generic") or {})
-        vo2_now = vo2.get("vo2MaxPreciseValue") or vo2.get("vo2MaxValue")
+        vo2_now = self._vo2max_real()
         vo2_base = self.athlete.get("baseline_vo2max")
 
         # FC Max osservata: massimo maxHR tra le attività recenti
@@ -762,6 +853,45 @@ class AnalyticsEngine:
         }
 
     # ===================================================== 4. CONTESTO COMPATTO
+    def _garmin_readiness_score(self):
+        readings = self._ep("training_readiness_today")
+        if isinstance(readings, dict):
+            readings = [readings]
+        if not isinstance(readings, list):
+            return None
+        day = self.dump.get("timestamp")
+        valid = [
+            row for row in readings
+            if isinstance(row, dict)
+            and (not day or row.get("calendarDate") in (None, day))
+            and _garmin_number(row.get("score"), minimum=1, maximum=100) is not None
+        ]
+        latest = max(valid, key=lambda row: row.get("timestamp") or row.get("timestampLocal") or "", default=None)
+        return latest["score"] if latest else None
+
+    def _training_load(self, status_device: dict):
+        day = self.dump.get("timestamp")
+        load = status_device.get("acuteTrainingLoadDTO") or {}
+        acute = chronic = ratio = None
+        if not day or status_device.get("calendarDate") in (None, day):
+            acute = _garmin_number(load.get("dailyTrainingLoadAcute"))
+            chronic = _garmin_number(load.get("dailyTrainingLoadChronic"))
+            ratio = _garmin_number(load.get("dailyAcuteChronicWorkloadRatio"))
+
+        # I dump precedenti possono contenere i carichi in una risposta separata.
+        if acute is None and chronic is None and ratio is None:
+            legacy = self._ep("trainingload_today") or {}
+            if isinstance(legacy, dict):
+                nested = legacy.get("trainingLoad")
+                if isinstance(nested, dict):
+                    legacy = nested
+                acute = _garmin_number(legacy.get("acuteLoad"))
+                chronic = _garmin_number(legacy.get("chronicLoad"))
+                ratio = _garmin_number(legacy.get("acwr"))
+        if ratio is None and acute is not None and chronic is not None and chronic > 0:
+            ratio = round(acute / chronic, 2)
+        return acute, chronic, ratio
+
     def build_context(self) -> dict:
         """Sintesi numerica compatta per DeepSeek (solo dati reali, niente testo libero)."""
         readiness = self.compute_readiness()
@@ -776,31 +906,27 @@ class AnalyticsEngine:
             self.athlete["max_hr"] = round(self.lthr * 1.06)  # top Z5 derivata
         progress = self.track_progress(running)
 
-        sleep = self._ep("sleep_today") or {}
-        ds = sleep.get("dailySleepDTO", {})
-        hrv = (self._ep("hrv_today") or {}).get("hrvSummary", {})
-        bb = self._ep("body_battery_today") or []
-        bb_vals = [v[1] for v in (bb[0].get("bodyBatteryValuesArray") or []) if len(v) > 1] if bb else []
-        rhr_rows = (((self._ep("rhr_today") or {}).get("allMetrics") or {})
-                    .get("metricsMap", {}).get("WELLNESS_RESTING_HEART_RATE", []))
-        rhr_val = rhr_rows[0].get("value") if rhr_rows else None
+        ds = self._sleep_today()
+        sleep_scores = ds.get("sleepScores") or {}
+        sleep_seconds = _garmin_number(ds.get("sleepTimeSeconds"), minimum=1)
+        sleep_nights = self._sleep_day_vals("sleepTimeSeconds")
+        hrv = self._hrv_today()
+        hrv_last_night = _garmin_number(hrv.get("lastNightAvg"), minimum=1)
+        hrv_weekly = _garmin_number(hrv.get("weeklyAvg"), minimum=1)
+        bb_vals = self._body_battery_values()
         races = self._ep("race_predictions") or {}
         ts = self._ep("training_status_today") or {}
         load = ((ts.get("mostRecentTrainingLoadBalance") or {})
                 .get("metricsTrainingLoadBalanceDTOMap", {}) or {})
         load_first = next(iter(load.values()), {}) if load else {}
 
-        # v87: CARICO ACUTO (EPOC 7gg) / CRONICO (28gg) / ACWR — estratto
-        # live dall'endpoint /trainingload-service/trainingload (se disponibile
-        # nel dump; altrimenti null, mai valori fissi o stimati).
-        tl = self._ep("trainingload_today") or {}
-        if isinstance(tl, dict) and isinstance(tl.get("trainingLoad"), dict):
-            tl = tl["trainingLoad"]
-        epoc_acuto = (tl.get("acuteLoad") if isinstance(tl, dict) else None)
-        epoc_cronico = (tl.get("chronicLoad") if isinstance(tl, dict) else None)
-        acwr = (tl.get("acwr") if isinstance(tl, dict) else None)
-        if acwr is None and epoc_acuto and epoc_cronico:
-            acwr = round(epoc_acuto / epoc_cronico, 2)
+        status_devices = (ts.get("mostRecentTrainingStatus") or {}).get("latestTrainingStatusData") or {}
+        status_device = max(
+            (row for row in status_devices.values() if isinstance(row, dict)),
+            key=lambda row: (row.get("calendarDate") or "", bool(row.get("primaryTrainingDevice"))),
+            default={},
+        )
+        epoc_acuto, epoc_cronico, acwr = self._training_load(status_device)
 
         # ---- Prompt dinamico per-utente (zero fallback cablati su Riccardo) ----
         nome = self.athlete.get("name") or "atleta"
@@ -835,7 +961,16 @@ class AnalyticsEngine:
         else:
             soglia_txt = "Soglia non disponibile: basati sul passo e sulla percezione dello sforzo."
 
+        official_hr, official_pace = self._thresholds_from_user_settings()
         return {
+            "garmin_data_date": self.dump.get("timestamp"),
+            "garmin_fetched_at": self.dump.get("fetched_at"),
+            "garmin_training_readiness": self._garmin_readiness_score(),
+            "garmin_vo2max": self._vo2max_real(for_display=True),
+            "garmin_official_threshold": {
+                "heart_rate": official_hr,
+                "pace_sec_per_km": official_pace,
+            },
             "atleta": {
                 "nome": self.athlete.get("name"),
                 "eta": self.athlete.get("age"),
@@ -853,30 +988,33 @@ class AnalyticsEngine:
             "personal_records": self._extract_pbs(),
             "readiness": readiness,
             "biometria": {
-                "sonno_h": round((ds.get("sleepTimeSeconds") or 0) / 3600.0, 1),
-                "sleep_score": (ds.get("sleepScores") or {}).get("overall", {}).get("value"),
+                "sonno_h": round(sleep_seconds / 3600.0, 1) if sleep_seconds is not None else None,
+                "sonno_secondi": sleep_seconds,
+                "sleep_score": _garmin_number(
+                    (sleep_scores.get("overall") or {}).get("value"), maximum=100),
                 "sleep_feedback": ds.get("sleepScoreFeedback"),
-                "deep_pct": (ds.get("sleepScores") or {}).get("deepPercentage", {}).get("value"),
-                "rem_pct": (ds.get("sleepScores") or {}).get("remPercentage", {}).get("value"),
-                "stress_notte": ds.get("avgSleepStress"),
-                "hrv_last_night": hrv.get("lastNightAvg"),
-                "hrv_weekly": hrv.get("weeklyAvg"),
+                "deep_pct": (sleep_scores.get("deepPercentage") or {}).get("value"),
+                "rem_pct": (sleep_scores.get("remPercentage") or {}).get("value"),
+                "stress_notte": _garmin_number(ds.get("avgSleepStress"), maximum=100),
+                "hrv_last_night": hrv_last_night,
+                "hrv_weekly": hrv_weekly,
                 "hrv_baseline": hrv.get("baseline"),
-                "hrv_7n": hrv.get("weeklyAvg") or hrv.get("lastNightAvg"),  # v87: HRV Overnight 7n
+                "hrv_7n": hrv_weekly,
                 "hrv_status": hrv.get("status"),
                 "body_battery_attuale": bb_vals[-1] if bb_vals else None,
                 "body_battery_picco": max(bb_vals) if bb_vals else None,
-                "rhr": rhr_val,
-                "stress_giorno": (self._ep("user_summary_today") or {}).get("averageStressLevel"),
-                "sonno_7n": self.sonno_7n_media(),
+                "rhr": self._resting_heart_rate(),
+                "stress_giorno": _garmin_number(
+                    (self._ep("user_summary_today") or {}).get("averageStressLevel"), maximum=100),
+                "sonno_7n": round(sum(sleep_nights) / len(sleep_nights) / 3600.0, 2) if sleep_nights else None,
+                # Media sui minuti interi visualizzati per ciascuna notte in Garmin Connect.
+                "sonno_7n_minuti": int(sum(s // 60 for s in sleep_nights) // len(sleep_nights)) if sleep_nights else None,
+                "sonno_7n_notti": len(sleep_nights),
                 "sleep_score_7n": self.sleep_score_7n_media(),
             },
             "allenamento": {
                 "vo2max_attuale": progress["vo2max"]["attuale"],
-                "training_status_feedback": ((ts.get("mostRecentTrainingStatus") or {})
-                                             .get("latestTrainingStatusData", {}) or {})
-                    .get("3433398418", {}).get("trainingStatusFeedbackPhrase")
-                    if (ts.get("mostRecentTrainingStatus") or {}) else None,
+                "training_status_feedback": status_device.get("trainingStatusFeedbackPhrase"),
                 "carico_aerobico_low": load_first.get("monthlyLoadAerobicLow"),
                 "carico_aerobico_high": load_first.get("monthlyLoadAerobicHigh"),
                 "carico_anaerobico": load_first.get("monthlyLoadAnaerobic"),
@@ -887,7 +1025,7 @@ class AnalyticsEngine:
                     "5k_s": races.get("time5K"), "10k_s": races.get("time10K"),
                     "hm_s": races.get("timeHalfMarathon"), "maratona_s": races.get("timeMarathon"),
                 },
-                # v87: CARICO ACUTO EPOC 7gg / CRONICO 28gg / ACWR (live)
+                # Carico Garmin acuto (7 giorni), cronico (28 giorni) e relativo rapporto.
                 "epoc_acuto_7gg": epoc_acuto,
                 "epoc_cronico_28gg": epoc_cronico,
                 "acwr": acwr,
@@ -922,8 +1060,12 @@ class AnalyticsEngine:
         r = c["readiness"]
         b = c["biometria"]
         a = c["allenamento"]
+        score = r["readiness_score"]
+        readiness_text = "Readiness non disponibile" if score is None else f"Readiness {score}/100 ({r['readiness_level']})"
+        if r["estimated"]:
+            readiness_text += " · provvisoria"
         lines = [
-            f"Readiness {r['readiness_score']}/100 ({r['readiness_level']}) "
+            f"{readiness_text} "
             f"[HRV {r['components']['hrv']} | Sleep {r['components']['sleep']} | "
             f"BB {r['components']['body_battery']} | Rest {r['components']['rest']}]",
             f"Sonno {b['sonno_h']}h (score {b['sleep_score']}, deep {b['deep_pct']}%, rem {b['rem_pct']}%) | "

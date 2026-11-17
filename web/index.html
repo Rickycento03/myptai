@@ -19,7 +19,7 @@
   <link rel="apple-touch-icon" href="/img/logo.svg?v=92">
   <link rel="icon" type="image/svg+xml" href="/img/logo.svg?v=92">
   <title>MyPTAI · Coach personale — dati reali Garmin</title>
-  <link rel="stylesheet" href="/css/style.css?v=92">
+  <link rel="stylesheet" href="/css/style.css?v=95">
 </head>
 <body>
   <!-- Onboarding: connetti il tuo account Garmin (login multi-dispositivo) -->
@@ -54,73 +54,68 @@
   </header>
 
   <main id="main">
-    <!-- ============ TAB READINESS · MASTER IBRIDO HOME ============ -->
-    <section id="tab-readiness" class="tab active">
-      <!-- 2) Anello 3D Readiness: punteggio grande + arco tricolore + verdetto -->
-      <div class="readiness-card ring-3d">
-        <div class="gauge-wrap">
-          <svg id="gauge" viewBox="0 0 200 200" width="210" height="210">
-            <defs>
-              <linearGradient id="gradGauge" x1="0%" y1="0%" x2="100%" y2="100%">
-                <stop offset="0%" stop-color="#ef4444"/>
-                <stop offset="50%" stop-color="#f59e0b"/>
-                <stop offset="100%" stop-color="#22c55e"/>
-              </linearGradient>
-              <filter id="glowGauge" x="-40%" y="-40%" width="180%" height="180%">
-                <feGaussianBlur stdDeviation="3.2" result="b"/>
-                <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
-              </filter>
-            </defs>
-            <circle class="gauge-track" cx="100" cy="100" r="84"/>
-            <circle class="gauge-track-soft" cx="100" cy="100" r="72"/>
-            <circle id="gauge-arc" class="gauge-arc" cx="100" cy="100" r="84"
-                    stroke="url(#gradGauge)" stroke-dasharray="0 527.5" filter="url(#glowGauge)" />
-          </svg>
-          <div class="readiness-ring-inner">
-            <span class="readiness-ring-label">READINESS</span>
-            <span class="readiness-ring-score" id="readiness-ring-score">--</span>
-            <span class="readiness-ring-verdict" id="readiness-ring-verdict">FORMA OTTIMA</span>
+    <!-- ============ TAB READINESS ============ -->
+    <section id="tab-readiness" class="tab active" aria-labelledby="readiness-title">
+      <div class="card readiness-hero" id="readiness-hero">
+        <div class="readiness-hero-head">
+          <div>
+            <h1 id="readiness-title">Readiness</h1>
+            <p id="garmin-data-date">Caricamento dati Garmin…</p>
+          </div>
+          <button id="btn-refresh" class="btn readiness-refresh" type="button">
+            <span aria-hidden="true">↻</span> Aggiorna Garmin
+          </button>
+        </div>
+        <div class="readiness-overview">
+          <div id="readiness-gauge" class="readiness-gauge" role="group" aria-label="Punteggio MyPTAI su 100">
+            <strong id="readiness-ring-score">—</strong>
+            <span aria-hidden="true">/ 100</span>
+          </div>
+          <div class="readiness-assessment">
+            <p class="readiness-caption">Punteggio MyPTAI</p>
+            <p id="readiness-ring-verdict">Caricamento…</p>
+            <p id="readiness-quality" class="readiness-quality" hidden></p>
+            <p class="readiness-garmin-score">
+              Training Readiness Garmin <strong id="garmin-training-readiness">—</strong>
+            </p>
+            <details id="readiness-method" class="readiness-method" hidden>
+              <summary>Come viene calcolato</summary>
+              <p id="readiness-weights"></p>
+            </details>
           </div>
         </div>
-        <div id="readiness-meta" class="readiness-meta"></div>
+        <p id="refresh-hint" class="readiness-feedback" role="status"></p>
+        <dl id="readiness-meta" class="readiness-meta"></dl>
       </div>
 
-      <!-- 3) Griglia 7 componenti biometriche reali + quadratino "Medie 7 Notti" -->
-      <div class="card metrics-card">
-        <div class="metrics-head">
-          <h2>Biometria di oggi</h2>
-          <span id="metrics-date" class="metrics-date"></span>
-        </div>
-        <div id="metrics-grid" class="metrics-grid"></div>
+      <div class="card metrics-card" aria-labelledby="metrics-title">
+        <div class="metrics-head"><h2 id="metrics-title">Metriche Garmin</h2></div>
+        <dl id="metrics-grid" class="metrics-grid"></dl>
+        <dl id="metrics-context" class="metrics-context"></dl>
       </div>
 
-      <!-- Card Fisiologia Karvonen (HRR) & ACWR Live -->
       <div class="card karvonen-card" id="karvonen-card">
-        <div class="metrics-head">
-          <h2>🫀 Fisiologia Karvonen & Carico ACWR</h2>
-          <span id="acwr-badge" class="badge badge-sweet">SWEET SPOT</span>
-        </div>
-        <div class="acwr-bar-wrap">
-          <div class="acwr-labels">
-            <span>Carico Acuto 7g: <b id="acwr-acute">—</b></span>
-            <span>ACWR: <b id="acwr-ratio">—</b></span>
-            <span>Carico Cronico 28g: <b id="acwr-chronic">—</b></span>
-          </div>
-          <div class="acwr-track">
-            <div id="acwr-indicator" class="acwr-indicator" style="left: 45%;"></div>
-          </div>
-        </div>
-        <div id="karvonen-zones-grid" class="karvonen-zones-grid"></div>
+        <div class="metrics-head"><h2>Carico di allenamento</h2></div>
+        <dl class="acwr-values">
+          <div><dt>Acuto · 7 giorni</dt><dd id="acwr-acute">—</dd></div>
+          <div><dt>Cronico · 28 giorni</dt><dd id="acwr-chronic">—</dd></div>
+          <div><dt>Rapporto ACWR</dt><dd id="acwr-ratio">—</dd></div>
+        </dl>
+        <p id="acwr-note" class="hint" hidden></p>
+        <details id="karvonen-zones" class="karvonen-zones" hidden>
+          <summary>Zone cardio · Karvonen</summary>
+          <div id="karvonen-zones-grid" class="karvonen-zones-grid"></div>
+        </details>
       </div>
 
       <!-- Card Morning Check & Fisiologia Giornaliera (Decision Engine) -->
       <div class="card morning-check-card" id="morning-check-card">
         <div class="step-head">
           <span class="step-num">🧠</span>
-          <h2 id="morning-check-title">Morning Check & Decision Engine</h2>
+          <h2 id="morning-check-title">Check del recupero</h2>
         </div>
-        <p id="morning-check-explanation" class="hint">Analisi fisiologica in corso...</p>
-        <div id="morning-check-action-box" class="action-box">
+        <p id="morning-check-explanation" class="hint">In attesa dei dati Garmin.</p>
+        <div id="morning-check-action-box" class="action-box" hidden>
           <span class="action-ico">⚡</span>
           <span id="morning-check-action-text" class="action-text">—</span>
         </div>
@@ -148,11 +143,6 @@
 
       <!-- 🏆 RESOCONTO & FEEDBACK POST-CORSA (Workflow 2 Deep Dive) -->
       <div id="home-post-run-container"></div>
-
-      <button id="btn-refresh" class="btn btn-ghost btn-block">
-        🔄 Aggiorna dati Garmin (live)
-      </button>
-      <p class="hint" id="refresh-hint"></p>
     </section>
 
     <!-- ============ TAB ALLENAMENTO ============ -->
@@ -424,6 +414,6 @@
 
   <div id="toast" class="toast hidden"></div>
 
-  <script src="/js/app.js?v=92"></script>
+  <script src="/js/app.js?v=97"></script>
 </body>
 </html>
