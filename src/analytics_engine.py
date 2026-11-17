@@ -5,7 +5,7 @@ analytics_engine.py - FASE 2: Engine Fisiologico Locale
 Elaborazione algebrica dei dati Garmin grezzi (garmin_raw_dump.json) per:
 
 1. READINESS SCORE (0-100): combinazione pesata di HRV notturno, Sleep Score,
-   Body Battery e stress notturno, con aggiustamento RHR.
+   HRV settimanale e Body Battery attuale.
 2. CLASSIFICAZIONE LAP: separa il ritmo Z2/Z3 (corse lente) da Z1/Z2 (recuperi)
    e da Z4+ (ripetute/soglia) usando le zone cardio di Riccardo da config.json.
 3. TRACKING PROGRESSI: FC Max (200), FC Soglia (176), Passo Soglia (4:44),
@@ -29,7 +29,7 @@ CONFIG_PATH = PROJECT_ROOT / "config.json"
 DUMP_PATH = PROJECT_ROOT / "garmin_raw_dump.json"
 OUTPUT_PATH = PROJECT_ROOT / "analytics_summary.json"
 
-READINESS_WEIGHTS = {"hrv": 0.35, "sleep": 0.30, "body_battery": 0.20, "rest": 0.15}
+READINESS_WEIGHTS = {"sleep": 0.30, "hrv": 0.25, "hrv_weekly": 0.05, "body_battery": 0.40}
 READINESS_MIN_COVERAGE = 0.50
 RHR_MIN_DAYS = 14
 
@@ -523,65 +523,42 @@ class AnalyticsEngine:
             return None
         return low, lower, upper
 
-    def hrv_component(self) -> Optional[float]:
-        """Valuta notte e media settimanale rispetto alla fascia personale Garmin."""
+    def hrv_component(self, *, weekly=False) -> Optional[float]:
+        """Valuta ciascuna misura HRV rispetto alla fascia personale Garmin."""
         summary = self._hrv_today()
-        last = _garmin_number(summary.get("lastNightAvg"), minimum=1)
-        weekly = _garmin_number(summary.get("weeklyAvg"), minimum=1)
+        value = _garmin_number(summary.get("weeklyAvg" if weekly else "lastNightAvg"), minimum=1)
         band = self._personal_hrv_band()
-        if band is None or last is None or weekly is None:
+        if band is None or value is None:
             return None
         low, lower, upper = band
 
-        def score_from_lower_bound(value):
-            if value >= lower:
-                return 100.0
-            return clamp((value - low) / max(1, lower - low) * 100)
-
-        weekly_score = score_from_lower_bound(weekly)
-        # Un picco isolato resta nel punteggio notturno. La media settimanale
-        # sopra la fascia perde gradualmente punti sulla scala della fascia stessa.
-        if weekly > upper:
-            weekly_score = clamp(100 * (1 - (weekly - upper) / max(1, upper - lower)))
-        return round(0.7 * score_from_lower_bound(last) + 0.3 * weekly_score, 1)
+        if weekly and value > upper:
+            return round(clamp(100 * (1 - (value - upper) / max(1, upper - lower))), 1)
+        if value >= lower:
+            return 100.0
+        return round(clamp((value - low) / max(1, lower - low) * 100), 1)
 
     def _sleep_score(self) -> Optional[float]:
         scores = self._sleep_today().get("sleepScores") or {}
         return _garmin_number((scores.get("overall") or {}).get("value"), maximum=100)
 
     def sleep_component(self) -> Optional[float]:
-        """Score sonno: usa lo Sleep Score Garmin (0-100); fallback su durata."""
+        """Score sonno Garmin, con stima sulla durata quando manca il punteggio."""
         overall = self._sleep_score()
         if overall is not None:
             return float(overall)
         duration = _garmin_number(self._sleep_today().get("sleepTimeSeconds"), minimum=1)
         if duration is None:
             return None
-        dur_score = clamp(duration / 28800.0 * 100.0)
-        rest = self.rest_component()
-        return round(0.7 * dur_score + 0.3 * rest if rest is not None else dur_score, 1)
+        return round(clamp(duration / 28800.0 * 100.0), 1)
 
     def _body_battery_values(self) -> list:
         return body_battery_values(self._ep("body_battery_today"), self.dump.get("timestamp"))
 
     def body_battery_component(self) -> Optional[float]:
-        """Score Body Battery: 70% valore attuale, 30% picco giornaliero."""
+        """Ultima Body Battery valida sulla scala Garmin 0-100."""
         values = self._body_battery_values()
-        if not values:
-            return None
-        peak, current = max(values), values[-1]
-
-        def _norm(v):
-            return clamp((v - 5.0) / 95.0 * 100.0)
-
-        return round(0.7 * _norm(current) + 0.3 * _norm(peak), 1)
-
-    def rest_component(self) -> Optional[float]:
-        """Score riposo: 100 - stress notturno medio (avgSleepStress 0-100)."""
-        stress = _garmin_number(self._sleep_today().get("avgSleepStress"), maximum=100)
-        if stress is None:
-            return None
-        return round(clamp(100.0 - float(stress)), 1)
+        return values[-1] if values else None
 
     def _rhr_reference(self) -> dict:
         """Mediana e oscillazione abituale sulle misure dei 28 giorni precedenti."""
@@ -608,35 +585,26 @@ class AnalyticsEngine:
             reference.update(baseline_bpm=baseline, tolerance_bpm=max(2, 2 * mad))
         return reference
 
-    def _rhr_adjustment(self, reference: dict) -> Optional[float]:
-        """Sottrae 2 punti per bpm oltre la variazione abituale, fino a 20."""
-        rhr_val = self._resting_heart_rate()
-        baseline = reference["baseline_bpm"]
-        if rhr_val is None or baseline is None:
-            return None
-        return clamp((rhr_val - baseline - reference["tolerance_bpm"]) * 2, 0, 20)
-
     def compute_readiness(self) -> dict:
         """Readiness su 100, usando i componenti disponibili e i loro pesi relativi."""
         components = {
             "hrv": self.hrv_component(),
+            "hrv_weekly": self.hrv_component(weekly=True),
             "sleep": self.sleep_component(),
             "body_battery": self.body_battery_component(),
-            "rest": self.rest_component(),
         }
         available = {key: weight for key, weight in READINESS_WEIGHTS.items() if components[key] is not None}
         coverage = sum(available.values())
         reference = self._rhr_reference()
-        penalty = self._rhr_adjustment(reference)
         score = level = None
         weights = {}
         if coverage >= READINESS_MIN_COVERAGE:
             weights = {key: weight / coverage for key, weight in available.items()}
-            score = clamp(sum(weights[key] * components[key] for key in weights) - (penalty or 0))
+            score = clamp(sum(weights[key] * components[key] for key in weights))
             level = "GREEN" if score >= 67 else "AMBER" if score >= 34 else "RED"
 
         estimated = score is not None and (
-            len(available) < len(READINESS_WEIGHTS) or penalty is None or self._sleep_score() is None
+            len(available) < len(READINESS_WEIGHTS) or self._sleep_score() is None
         )
         return {
             "readiness_score": round(score, 1) if score is not None else None,
@@ -645,7 +613,7 @@ class AnalyticsEngine:
             "components": components,
             "hrv_calibrating": self._personal_hrv_band() is None,
             "rhr_reference": reference,
-            "rhr_adjustment_penalty": round(penalty, 1) if penalty is not None else None,
+            "rhr_adjustment_penalty": 0,
             "weights": weights,
         }
 
@@ -1067,7 +1035,7 @@ class AnalyticsEngine:
         lines = [
             f"{readiness_text} "
             f"[HRV {r['components']['hrv']} | Sleep {r['components']['sleep']} | "
-            f"BB {r['components']['body_battery']} | Rest {r['components']['rest']}]",
+            f"HRV 7g {r['components']['hrv_weekly']} | BB {r['components']['body_battery']}]",
             f"Sonno {b['sonno_h']}h (score {b['sleep_score']}, deep {b['deep_pct']}%, rem {b['rem_pct']}%) | "
             f"HRV notte {b['hrv_last_night']} (weekly {b['hrv_weekly']}, status {b['hrv_status']}) | "
             f"BB {b['body_battery_attuale']}/{b['body_battery_picco']} | RHR {b['rhr']}",
