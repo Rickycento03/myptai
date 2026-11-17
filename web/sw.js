@@ -1,16 +1,17 @@
 /* =============================================================================
    Service Worker - MyPTAI PWA
    - PRECACHE degli asset statici (cache-first)
-   - API /api/*: network-first con fallback su cache
+   - Readiness e stato della sessione: solo rete
+   - Altre API GET: network-first con fallback su cache
    Requisito: HTTPS o localhost (secure context) per la registrazione.
    ============================================================================= */
-const CACHE = "garmin-coach-v92";
+const CACHE = "garmin-coach-v97";
 const PRECACHE = [
   "/",
   "/index.html",
   "/manifest.json",
-  "/css/style.css?v=92",
-  "/js/app.js?v=92",
+  "/css/style.css?v=95",
+  "/js/app.js?v=97",
   "/img/logo.svg?v=92",
 ];
 
@@ -32,6 +33,8 @@ self.addEventListener("activate", (event) => {
 
 self.addEventListener("fetch", (event) => {
   const req = event.request;
+  const path = new URL(req.url).pathname;
+  if (path === "/api/readiness" || path === "/api/health") return;
   if (req.method !== "GET" || req.url.includes("/api/")) {
     // API: network-first con fallback su cache (per usabilità offline parziale)
     if (req.method === "GET") {

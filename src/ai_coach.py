@@ -452,13 +452,26 @@ SCHEMA JSON DA RESTITUIRE:
 
         bio = self.summary.get("biometria", {})
         readiness = self.summary.get("readiness", {})
-        score = readiness.get("readiness_score", 50)
-        level = readiness.get("readiness_level", "AMBER")
+        score = readiness.get("readiness_score")
+        level = readiness.get("readiness_level")
+        fallback = {
+            "readiness_score": score,
+            "readiness_level": level,
+            "readiness_status": decision["status"],
+            "decisione_allenamento": decision["decision"],
+            "titolo_card": decision["card_title"],
+            "spiegazione_fisiologica": decision["explanation"],
+            "azione_consigliata": decision["action"],
+            "decisione_engine": decision,
+        }
+        if score is None:
+            return fallback
 
         # Prova ad arricchire con AI se disponibile, altrimenti fallback rule engine istantaneo
+        quality = " provvisoria" if readiness.get("estimated") else ""
         user_prompt = (
             f"Fornisci una sintesi tecnica fisiologica mattutina in JSON per l'atleta. "
-            f"Readiness Score: {score}/100 ({level}). HRV Status: {bio.get('hrv_status')}, "
+            f"Readiness{quality} {score}/100 ({level}). HRV Status: {bio.get('hrv_status')}, "
             f"Sonno: {bio.get('sonno_h')}h ({bio.get('sleep_score')}/100), Body Battery: {bio.get('body_battery_attuale')}, "
             f"RHR: {bio.get('rhr')}. Allenamento previsto: {(scheduled_workout or {}).get('nome', 'Nessuno')}. "
             f"Decisione del Rule Engine: {decision['decision']}.\n"
@@ -481,16 +494,7 @@ SCHEMA JSON DA RESTITUIRE:
         except Exception:
             pass
 
-        return {
-            "readiness_score": score,
-            "readiness_level": level,
-            "readiness_status": decision["status"],
-            "decisione_allenamento": decision["decision"],
-            "titolo_card": decision["card_title"],
-            "spiegazione_fisiologica": decision["explanation"],
-            "azione_consigliata": decision["action"],
-            "decisione_engine": decision
-        }
+        return fallback
 
     # ------------------------------------------------------------------ WORKFLOW 2: POST-RUN DEEP DIVE
     def analyze_post_run_activity(self, activity_data: dict) -> dict:

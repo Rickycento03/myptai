@@ -12,7 +12,8 @@ Output: garmin_raw_dump.json (alla radice del progetto) per l'analisi in FASE 2.
 import os
 import json
 import sys
-from datetime import date, timedelta
+import tempfile
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 # --- Configurazione -----------------------------------------------------------
@@ -100,7 +101,11 @@ def build_client(email: str, password: str, tokenstore: str = None) -> "Garmin":
             client.login(str(ts))
             return client
         except Exception as err:  # noqa: BLE001 (tokenstore scaduto -> login diretto)
+            if not password:
+                raise RuntimeError("Sessione Garmin scaduta: accedi di nuovo.") from err
             print(f"  ⚠️ Tokenstore non valido ({err}), login diretto...")
+    if not password:
+        raise RuntimeError("Sessione Garmin non disponibile: accedi di nuovo.")
     client.login()  # può sollevare per credenziali errate / rete
     try:
         # Salvataggio tokenstore nel formato della libreria installata:
@@ -126,39 +131,45 @@ def per_user_dump_path(email: str) -> Path:
 
 
 
+def _connect_api(client: "Garmin", path: str):
+    get = getattr(client, "connectapi", None)
+    if not callable(get):
+        get = getattr(getattr(client, "client", None), "connectapi", None)
+    if not callable(get):
+        raise RuntimeError("Versione di garminconnect senza lettura Connect API.")
+    return get(path)
+
+
 def get_user_settings(client: "Garmin") -> dict:
-    """Endpoint /userprofile-service/userprofile/user-settings: soglie ufficiali
-    Garmin (lactateThresholdHeartRate / lactateThresholdSpeed / maxHeartRate /
-    vo2MaxRunning) dell'utente.
-    Compatibile con garminconnect 0.3.x (client interno `connectapi`)."""
-    inner = getattr(client, "client", None)
-    if inner is None or not hasattr(inner, "connectapi"):
-        raise RuntimeError("client interno senza connectapi: libreria non compatibile")
-    return inner.connectapi("/userprofile-service/userprofile/user-settings")
+    """Restituisce la FC e la velocità di soglia del profilo Garmin."""
+    return _connect_api(client, "/userprofile-service/userprofile/user-settings")
 
 
-def get_training_load(client: "Garmin", date_iso: str) -> dict:
-    """Endpoint /trainingload-service/trainingload/{data}: CARICO ACUTO (EPOC
-    7gg) / CARICO CRONICO (28gg) / ACWR reali Garmin (v87).
-    Fail-safe: se l'endpoint non è disponibile l'errore viene catturato da
-    fetch_endpoint e le metriche restano null (zero crash)."""
-    inner = getattr(client, "client", None)
-    if inner is None or not hasattr(inner, "connectapi"):
-        raise RuntimeError("client interno senza connectapi: libreria non compatibile")
-    return inner.connectapi(f"/trainingload-service/trainingload/{date_iso}")
+def get_latest_max_metrics(client: "Garmin", day: str) -> dict:
+    """Restituisce le misure più recenti di corsa e ciclismo fino a day."""
+    return _connect_api(client, f"/metrics-service/metrics/maxmet/latest/{day}")
+
+
+def get_rhr_history(client: "Garmin", day: date) -> list:
+    """Restituisce le misure Garmin dei 28 giorni precedenti in una richiesta."""
+    start = day - timedelta(days=28)
+    end = day - timedelta(days=1)
+    return _connect_api(client, f"/usersummary-service/stats/heartRate/daily/{start}/{end}")
 
 
 def run_probe(email: str = None, password: str = None, tokenstore: str = None,
               dump_path: Path = None) -> None:
     """Estrae i dati Garmin. Multi-utente: email/password/tokenstore/dump_path
     opzionali (default: account principale da config.json e dump alla radice)."""
-    today = date.today().isoformat()
-    yesterday = (date.today() - timedelta(days=1)).isoformat()
+    probe_day = date.today()
+    today = probe_day.isoformat()
+    yesterday = (probe_day - timedelta(days=1)).isoformat()
 
-    if not email or not password:
+    if not email or (not password and not tokenstore):
         creds = load_credentials()
         email = email or creds["email"]
-        password = password or creds["password"]
+        if not password and email.casefold() == creds["email"].casefold():
+            password = creds["password"]
 
     print("\n🌐 Connessione a Garmin Connect...")
     client = build_client(email, password, tokenstore)
@@ -190,9 +201,6 @@ def run_probe(email: str = None, password: str = None, tokenstore: str = None,
     # 1b. Impostazioni utente (soglie ufficiali Garmin: FC Soglia / Passo Soglia / FC Max / Peso / Età)
     fetch_endpoint("user_settings", get_user_settings, client)
 
-    # 1c. Carico allenamento: ACUTO EPOC 7gg / CRONICO 28gg / ACWR (v87)
-    fetch_endpoint("trainingload_today", get_training_load, client, today)
-
     # 2. Statistiche giornaliere
     fetch_endpoint("stats_today", client.get_stats, today)
     fetch_endpoint("stats_yesterday", client.get_stats, yesterday)
@@ -205,17 +213,21 @@ def run_probe(email: str = None, password: str = None, tokenstore: str = None,
     fetch_endpoint("body_battery_today", client.get_body_battery, today)
     fetch_endpoint("body_battery_yesterday", client.get_body_battery, yesterday)
 
-    # 3b. Sonno ultime 7 notti (per le medie settimanali "Medie 7 Notti")
+    # Il sonno di oggi e di ieri entra nella media senza ripetere le chiamate Garmin.
+    endpoints = raw_dump["endpoints"]
+    endpoints[f"sleep_day_{today}"] = endpoints["sleep_today"]
+    endpoints[f"sleep_day_{yesterday}"] = endpoints["sleep_yesterday"]
     print("\n🌙 Estrazione sonno 7 notti (medie settimanali)...")
-    for i in range(6, -1, -1):
-        d = (date.today() - timedelta(days=i)).isoformat()
+    for i in range(6, 1, -1):
+        d = (probe_day - timedelta(days=i)).isoformat()
         fetch_endpoint(f"sleep_day_{d}", client.get_sleep_data, d)
 
-    # 4. Allenamento: Status, Readiness, Metriche
+    # 4. Allenamento: Training Status include carico acuto, cronico e rapporto.
     fetch_endpoint("training_status_today", client.get_training_status, today)
     fetch_endpoint("training_readiness_today", client.get_training_readiness, today)
-    fetch_endpoint("max_metrics_today", client.get_max_metrics, today)
+    fetch_endpoint("max_metrics_latest", get_latest_max_metrics, client, today)
     fetch_endpoint("rhr_today", client.get_rhr_day, today)
+    fetch_endpoint("rhr_history", get_rhr_history, client, probe_day)
     fetch_endpoint("race_predictions", client.get_race_predictions)
     fetch_endpoint("endurance_score_today", client.get_endurance_score, today)
 
@@ -247,18 +259,42 @@ def run_probe(email: str = None, password: str = None, tokenstore: str = None,
         raw_dump["endpoints"]["recent_activities"] = {"status": "ERROR", "error": str(err)}
         print(f"  ✗ recent_activities: Errore ({err})")
 
+    # Una risposta senza biometria utile non sostituisce l'ultima lettura.
+    sleep = (endpoints["sleep_today"].get("data") or {}).get("dailySleepDTO") or {}
+    sleep_score = ((sleep.get("sleepScores") or {}).get("overall") or {}).get("value")
+    hrv = (endpoints["hrv_today"].get("data") or {}).get("hrvSummary") or {}
+    battery = endpoints["body_battery_today"].get("data") or []
+    rhr = (endpoints["rhr_today"].get("data") or {}).get("allMetrics") or {}
+    resting_hr = (rhr.get("metricsMap") or {}).get("WELLNESS_RESTING_HEART_RATE") or []
+    if not (
+        sleep.get("sleepTimeSeconds") or sleep_score is not None
+        or hrv.get("lastNightAvg") or hrv.get("weeklyAvg")
+        or any(isinstance(row, dict) and row.get("bodyBatteryValuesArray") for row in battery)
+        or any(row.get("value") for row in resting_hr)
+    ):
+        raise RuntimeError("Garmin non ha restituito la biometria di oggi.")
+    raw_dump["fetched_at"] = datetime.now(timezone.utc).isoformat()
+
     # Salva il dump completo
     out_path = dump_path or DUMP_PATH
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(out_path, "w", encoding="utf-8") as f:
-        json.dump(raw_dump, f, indent=2, ensure_ascii=False, default=str)
+    temp_path = None
+    try:
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=out_path.parent,
+                                         prefix=f".{out_path.name}.", delete=False) as f:
+            temp_path = Path(f.name)
+            json.dump(raw_dump, f, indent=2, ensure_ascii=False, default=str)
+        temp_path.replace(out_path)
+    finally:
+        if temp_path is not None:
+            temp_path.unlink(missing_ok=True)
 
     ok = sum(1 for e in raw_dump["endpoints"].values() if e["status"] == "SUCCESS")
     errs = sum(1 for e in raw_dump["endpoints"].values() if e["status"] == "ERROR")
 
     print(f"\n🎉 DATA DISCOVERY COMPLETATA!")
     print(f"   Endpoint OK: {ok}  |  Endpoint in errore: {errs}")
-    print(f"📄 Dump grezzo salvato in: {DUMP_PATH}")
+    print(f"📄 Dump grezzo salvato in: {out_path}")
 
 
 if __name__ == "__main__":

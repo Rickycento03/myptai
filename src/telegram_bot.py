@@ -134,7 +134,9 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         text = engine.build_context_text()
         r = summary["readiness"]
         emoji = {"GREEN": "🟢", "AMBER": "🟠", "RED": "🔴"}.get(r["readiness_level"], "⚪")
-        header = f"{emoji} <b>Readiness {r['readiness_score']}/100 ({r['readiness_level']})</b>\n\n"
+        score = r["readiness_score"]
+        label = "Readiness non disponibile" if score is None else f"Readiness {score}/100 ({r['readiness_level']})"
+        header = f"{emoji} <b>{label}</b>\n\n"
         await update.message.reply_text(header + "<pre>" + escape(text) + "</pre>",
                                         parse_mode="HTML")
     except Exception as err:  # noqa: BLE001

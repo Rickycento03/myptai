@@ -98,6 +98,7 @@ function switchAccount(email) {
   SESSION = { token: acc.token, user_email: acc.email };
   localStorage.setItem(SESSION_STORE, JSON.stringify(SESSION));
   CURRENT_USER_EMAIL = acc.email;
+  resetReadiness();
   closeAccountModal();
   toast("🔄 Account attivo: " + (acc.display_name || acc.email), 2600);
   refreshAllData();
@@ -109,7 +110,7 @@ function logout() {
   localStorage.removeItem(SESSION_STORE);
   SESSION = null;
   CURRENT_USER_EMAIL = null;
-  _lastSummary = null;
+  resetReadiness();
   closeAccountModal();
   showLogin();
 }
@@ -485,12 +486,15 @@ function fmtDurClock(s) {
 }
 async function api(path, opts = {}) {
   const headers = { ...(opts.headers || {}), "Content-Type": "application/json" };
-  if (SESSION && SESSION.token) headers["Authorization"] = "Bearer " + SESSION.token;
+  const token = SESSION?.token;
+  if (token) headers["Authorization"] = "Bearer " + token;
   const res = await fetch(path, { ...opts, headers });
   if (res.status === 401) {
-    localStorage.removeItem(SESSION_STORE);
-    SESSION = null;
-    showLogin("🔒 Sessione non valida: accedi di nuovo con le credenziali Garmin");
+    if (token === SESSION?.token) {
+      localStorage.removeItem(SESSION_STORE);
+      SESSION = null;
+      showLogin("🔒 Sessione non valida: accedi di nuovo con le credenziali Garmin");
+    }
     throw new Error("Sessione non valida");
   }
   let data = null;
@@ -526,159 +530,171 @@ function setPill(level, score) {
   pill.textContent = `${score}/100 ${level}`;
   pill.className = `pill pill-${level.toLowerCase()} hidden`;
 }
-const VERDICT = { green: "FORMA OTTIMA", amber: "RECUPERO PARZIALE", red: "RECUPERA OGGI" };
-function setGauge(score) {
-  const arc = $("#gauge-arc");
-  const circ = 2 * Math.PI * 84; // r=84
-  const pct = Math.max(0, Math.min(100, score)) / 100;
-  arc.setAttribute("stroke-dasharray", `${(pct * circ).toFixed(1)} ${circ.toFixed(1)}`);
-  $("#readiness-ring-score").textContent = score == null ? "--" : Math.round(score);
-  const col = score >= 67 ? "var(--green)" : score >= 34 ? "var(--amber)" : "var(--red)";
-  $("#readiness-ring-verdict").textContent = score >= 67 ? VERDICT.green : score >= 34 ? VERDICT.amber : VERDICT.red;
-  $("#readiness-ring-verdict").style.color = col;
+
+const READINESS_LEVELS = { GREEN: "Alta", AMBER: "Moderata", RED: "Bassa" };
+const readinessNumber = new Intl.NumberFormat("it-IT", { maximumFractionDigits: 2 });
+const dayLabel = new Intl.DateTimeFormat("it-IT", { day: "numeric", month: "long", timeZone: "UTC" });
+
+function metricValue(value, unit = "") {
+  return Number.isFinite(value) ? readinessNumber.format(value) + unit : "—";
 }
-function barColor(v) {
-  return v >= 67 ? "var(--green)" : v >= 34 ? "var(--amber)" : "var(--red)";
-}
-function fmtSleepHours(h) {
-  if (h == null) return "—";
-  const total = Math.round(h * 60);
+
+function formatSleepMinutes(value) {
+  if (!Number.isFinite(value)) return "—";
+  const total = Math.floor(value);
   return `${Math.floor(total / 60)}h ${String(total % 60).padStart(2, "0")}m`;
 }
-function barPct(v) {
-  return Math.max(0, Math.min(100, v == null ? 0 : v));
+
+function localDateKey(now) {
+  const month = String(now.getMonth() + 1).padStart(2, "0");
+  const day = String(now.getDate()).padStart(2, "0");
+  return `${now.getFullYear()}-${month}-${day}`;
 }
-/* Griglia Master Ibrido: 7 componenti biometriche reali + quadratino "Medie 7 Notti" */
+
+function renderReadinessOverview(d) {
+  const measured = new Date(`${d.garmin_data_date}T00:00:00Z`);
+  const fetched = new Date(d.garmin_fetched_at || "");
+  const hasDate = Number.isFinite(measured.getTime());
+  const isToday = hasDate && d.garmin_data_date === localDateKey(new Date());
+
+  let dateText = hasDate ? `Dati del ${dayLabel.format(measured)}` : "Data dei dati Garmin non disponibile";
+  if (Number.isFinite(fetched.getTime())) {
+    const time = fetched.toLocaleTimeString("it-IT", { hour: "2-digit", minute: "2-digit" });
+    const date = localDateKey(fetched) === d.garmin_data_date ? "" : fetched.toLocaleDateString("it-IT") + " ";
+    dateText += ` · Lettura ${date}${time}`;
+  }
+  $("#garmin-data-date").textContent = dateText;
+
+  const score = d.readiness_score;
+  const level = READINESS_LEVELS[d.readiness_level];
+  const hasScore = Number.isFinite(score);
+  const provisional = hasScore && d.readiness_estimated;
+  $("#readiness-hero").dataset.level = hasScore && isToday && level && !provisional
+    ? d.readiness_level.toLowerCase() : "";
+  $("#readiness-gauge").style.setProperty("--gauge-progress", `${hasScore ? Math.min(100, Math.max(0, score)) : 0}%`);
+  $("#readiness-ring-score").textContent = metricValue(score);
+  $("#readiness-ring-verdict").textContent = provisional ? "Readiness provvisoria"
+    : hasScore && level ? `Readiness ${level.toLowerCase()}` : "Punteggio non disponibile";
+  $("#garmin-training-readiness").textContent = metricValue(d.garmin_training_readiness, "/100");
+
+  const quality = $("#readiness-quality");
+  const notices = [];
+  if (hasDate && !isToday) notices.push("Dati di una giornata precedente");
+  quality.textContent = notices.join(" · ");
+  quality.hidden = notices.length === 0;
+
+  const weights = d.weights || {};
+  const componentLabels = { hrv: "HRV", sleep: "Sonno", body_battery: "Body Battery", rest: "Stress notturno" };
+  const components = Object.entries(componentLabels)
+    .filter(([name]) => Number.isFinite(weights[name]))
+    .map(([name, label]) => `${label} ${metricValue(weights[name] * 100, "%")}`);
+  $("#readiness-method").hidden = !hasScore || components.length === 0;
+  const penalty = d.rhr_adjustment_penalty;
+  const reference = d.rhr_reference || {};
+  const limit = reference.baseline_bpm + reference.tolerance_bpm;
+  const method = [components.join(" · ") + "."];
+  if (Number.isFinite(weights.body_battery)) method.push("Body Battery usa il 70% del valore attuale e il 30% del picco.");
+  if (Number.isFinite(reference.baseline_bpm)) {
+    method.push(`La correzione per la FC a riposo scatta oltre ${metricValue(limit, " bpm")}.`);
+    if (penalty > 0) method.push(`Oggi ha sottratto ${metricValue(penalty)} punti.`);
+  }
+  $("#readiness-weights").textContent = method.join(" ");
+  return isToday;
+}
+
 function renderMetricsGrid(d) {
   const b = d.biometria || {};
-  const c = d.components || {};
-  // 7 componenti con valore REALE + barra di stato (0-100 reale)
-  const rhrPct = b.rhr != null ? barPct(100 - Math.max(0, (b.rhr - 50) * 8)) : 0; // logica engine (baseline 50)
-  const recupPct = b.stress_notte != null ? barPct(100 - b.stress_notte) : 0;
-  const stressPct = b.stress_giorno != null ? barPct(100 - b.stress_giorno) : 0;
+  const sleepMinutes = Number.isFinite(b.sonno_secondi) ? b.sonno_secondi / 60
+    : b.sonno_h > 0 ? Math.round(b.sonno_h * 60) : null;
+  const meanSleepMinutes = b.sonno_7n_minuti ?? (b.sonno_7n > 0 ? Math.round(b.sonno_7n * 60) : null);
+  const {balancedLow, balancedUpper} = b.hrv_baseline || {};
+  let hrvDetail = d.hrv_calibrating ? "HRV in calibrazione" : "";
+  if (!d.hrv_calibrating && Number.isFinite(balancedLow) && Number.isFinite(balancedUpper)) {
+    hrvDetail = `Fascia ${metricValue(balancedLow)}–${metricValue(balancedUpper, " ms")}`;
+    if (b.hrv_weekly > balancedUpper) hrvDetail += " · Media sopra fascia";
+  }
+  const reference = d.rhr_reference || {};
+  const rhrDetail = Number.isFinite(reference.baseline_bpm)
+    ? "Riferimento " + metricValue(reference.baseline_bpm, " bpm")
+    : Number.isFinite(reference.min_days) ? `Calibrazione ${reference.days}/${reference.min_days} giorni` : "";
   const tiles = [
-    tile("😴", "Sonno", fmtSleepHours(b.sonno_h), barPct(c.sleep), c.sleep),
-    tile("📈", "HRV Notte", b.hrv_last_night != null ? `${Math.round(b.hrv_last_night)}ms` : "—", barPct(c.hrv), c.hrv),
-    tile("🧘", "Recupero Stress", b.stress_notte != null ? `${Math.round(recupPct)}%` : "—", recupPct, recupPct),
-    tile("❤️", "RHR FC Riposo", b.rhr != null ? `${Math.round(b.rhr)}bpm` : "—", rhrPct, rhrPct),
-    tile("🔋", "Body Battery", b.body_battery_attuale != null ? `${Math.round(b.body_battery_attuale)}%` : "—", barPct(b.body_battery_attuale), b.body_battery_attuale),
-    tile("⚡", "Picco Batteria", b.body_battery_picco != null ? `${Math.round(b.body_battery_picco)}%` : "—", barPct(b.body_battery_picco), b.body_battery_picco),
-    tile("🌡️", "Stress Giorno", b.stress_giorno != null ? `${Math.round(b.stress_giorno)}` : "—", stressPct, stressPct),
+    ["Sonno", formatSleepMinutes(sleepMinutes), "Punteggio " + metricValue(b.sleep_score, "/100")],
+    ["HRV notturna", metricValue(b.hrv_last_night, " ms"), "Media 7 giorni " + metricValue(b.hrv_weekly, " ms"), hrvDetail],
+    ["Body Battery", metricValue(b.body_battery_attuale, "/100"), "Picco " + metricValue(b.body_battery_picco, "/100")],
+    ["FC a riposo", metricValue(b.rhr, " bpm"), rhrDetail],
   ];
-  // Quadratino unico "Medie 7 Notti" (dati reali dal probe: medie settimanali Garmin)
-  tiles.push(`<div class="metric-tile medie-tile">
-    <div class="medie-title">📊 Medie 7 Notti</div>
-    <div class="medie-row"><span>Media HRV</span><b>${b.hrv_weekly != null ? Math.round(b.hrv_weekly) + "ms" : "—"}</b></div>
-    <div class="medie-row"><span>Media Tempo Dormito</span><b>${fmtSleepHours(b.sonno_7n)}</b></div>
-  </div>`);
-  $("#metrics-grid").innerHTML = tiles.join("");
-  const dt = $("#metrics-date");
-  if (dt) dt.textContent = new Date().toLocaleDateString("it-IT", { day: "numeric", month: "long" });
+  $("#metrics-grid").innerHTML = tiles.map(([name, value, ...details]) => `
+    <div class="metric-tile"><dt class="mt-name">${name}</dt>
+      <dd class="mt-value">${value}${details.filter(Boolean).map(detail => `<small class="mt-detail">${detail}</small>`).join("")}</dd>
+    </div>`).join("");
+
+  const sleepCount = b.sonno_7n_notti;
+  const coverage = sleepCount > 0 && sleepCount < 7 ? `<small>${sleepCount} notti su 7</small>` : "";
+  $("#metrics-context").innerHTML = `
+    <div><dt>Stress diurno</dt><dd>${metricValue(b.stress_giorno, "/100")}</dd></div>
+    <div><dt>Stress notturno</dt><dd>${metricValue(b.stress_notte, "/100")}</dd></div>
+    <div><dt>Sonno · media 7 notti</dt><dd>${formatSleepMinutes(meanSleepMinutes)}${coverage}</dd></div>`;
 }
 
-/* Render Fisiologia Karvonen (HRR) & Carico ACWR */
 function renderKarvonenAndACWR(d) {
-  const all = d.allenamento || {};
-  const acwr = all.acwr != null ? parseFloat(all.acwr) : (all.epoc_acuto_7gg && all.epoc_cronico_28gg ? (all.epoc_acuto_7gg / all.epoc_cronico_28gg).toFixed(2) : 1.15);
-  const acute = all.epoc_acuto_7gg || all.carico_aerobico_high || 520;
-  const chronic = all.epoc_cronico_28gg || 252;
+  const load = d.allenamento || {};
+  $("#acwr-acute").textContent = metricValue(load.epoc_acuto_7gg);
+  $("#acwr-chronic").textContent = metricValue(load.epoc_cronico_28gg);
+  $("#acwr-ratio").textContent = metricValue(load.acwr);
+  const missing = [load.epoc_acuto_7gg, load.epoc_cronico_28gg, load.acwr].filter(value => !Number.isFinite(value)).length;
+  $("#acwr-note").hidden = missing === 0;
+  $("#acwr-note").textContent = missing === 3 ? "Carico Garmin non disponibile." : "Carico Garmin parziale.";
 
-  const acBadge = $("#acwr-badge");
-  const acAcute = $("#acwr-acute");
-  const acChronic = $("#acwr-chronic");
-  const acRatio = $("#acwr-ratio");
-  const acInd = $("#acwr-indicator");
-
-  if (acAcute) acAcute.textContent = `${Math.round(acute)}`;
-  if (acChronic) acChronic.textContent = `${Math.round(chronic)}`;
-  if (acRatio) acRatio.textContent = `${acwr}`;
-
-  if (acBadge) {
-    if (acwr < 0.8) {
-      acBadge.textContent = "UNDER-TRAINING (Basso)";
-      acBadge.className = "badge badge-amber";
-    } else if (acwr <= 1.3) {
-      acBadge.textContent = "SWEET SPOT (Ottimale)";
-      acBadge.className = "badge badge-sweet";
-    } else if (acwr <= 1.5) {
-      acBadge.textContent = "HIGH LOAD (Elevato)";
-      acBadge.className = "badge badge-amber";
-    } else {
-      acBadge.textContent = "DANGER ZONE / CRASH BLOCK";
-      acBadge.className = "badge badge-red";
-    }
-  }
-
-  if (acInd) {
-    const pct = Math.max(5, Math.min(95, (acwr / 2.0) * 100));
-    acInd.style.left = `${pct}%`;
-  }
-
-  // Griglia Zone Karvonen
-  const zonesGrid = $("#karvonen-zones-grid");
-  if (zonesGrid) {
-    const zones = (d.atleta && d.atleta.zone_hr) || {
-      z1_recovery: [125, 140],
-      z2_endurance: [140, 155],
-      z3_tempo: [155, 170],
-      z4_threshold: [170, 185],
-      z5_vo2max: [185, 200]
-    };
-    const labels = {
-      z1_recovery: { name: "Z1 Spurgo", desc: "Recupero attivo" },
-      z2_endurance: { name: "Z2 Base", desc: "Endurance pura" },
-      z3_tempo: { name: "Z3 Medio", desc: "Tempo run" },
-      z4_threshold: { name: "Z4 Soglia", desc: "Ritmo gara / Lattato" },
-      z5_vo2max: { name: "Z5 VO2Max", desc: "Massimale" }
-    };
-    zonesGrid.innerHTML = Object.entries(zones).map(([k, bpm]) => {
-      const info = labels[k] || { name: k.toUpperCase(), desc: "" };
-      const range = Array.isArray(bpm) ? `${bpm[0]}-${bpm[1]} bpm` : (bpm.bpm ? `${bpm.bpm[0]}-${bpm.bpm[1]} bpm` : "—");
-      return `<div class="k-zone-item">
-        <div class="kz-title">${info.name}</div>
-        <div class="kz-bpm">${range}</div>
-        <div class="kz-desc">${info.desc}</div>
-      </div>`;
-    }).join("");
-  }
+  const zones = d.atleta?.zone_hr || {};
+  const labels = {
+    z1_recovery: "Z1 · Recupero attivo",
+    z2_endurance: "Z2 · Riscaldamento e recupero",
+    z3_tempo: "Z3 · Corsa lenta",
+    z4_threshold: "Z4 · Soglia",
+    z5_vo2max: "Z5 · Sprint e VO₂max",
+  };
+  const rows = Object.entries(labels).flatMap(([key, label]) => {
+    const range = zones[key]?.bpm || zones[key];
+    if (!Array.isArray(range) || !range.slice(0, 2).every(Number.isFinite) || range.length < 2) return [];
+    return `<div class="k-zone-item">
+      <div class="kz-title">${label}</div>
+      <div class="kz-bpm">${range[0]}–${range[1]} bpm</div>
+    </div>`;
+  });
+  $("#karvonen-zones-grid").innerHTML = rows.join("");
+  $("#karvonen-zones").hidden = rows.length === 0 || !d.atleta?.fc_max || !d.biometria?.rhr;
 }
 
-/* Morning Check Fisiologico Automatico */
-async function loadMorningCheck() {
+async function loadMorningCheck(summary, hasCurrentScore) {
+  const title = $("#morning-check-title");
+  const explanation = $("#morning-check-explanation");
+  const action = $("#morning-check-action-box");
+  title.textContent = "Check del recupero";
+  action.hidden = true;
+  explanation.textContent = hasCurrentScore
+    ? "Analisi in corso…" : "Disponibile con le metriche Garmin di oggi.";
+  if (!hasCurrentScore) return;
   try {
     const res = await api("/api/workouts/morning-check", { method: "POST" });
-    const titleEl = $("#morning-check-title");
-    const expEl = $("#morning-check-explanation");
-    const actText = $("#morning-check-action-text");
-    if (titleEl && res.titolo_card) titleEl.textContent = res.titolo_card;
-    if (expEl && res.spiegazione_fisiologica) expEl.textContent = res.spiegazione_fisiologica;
-    if (actText && res.azione_consigliata) actText.textContent = res.azione_consigliata;
+    if (summary !== _lastSummary) return;
+    if (res.titolo_card) title.textContent = res.titolo_card;
+    explanation.textContent = res.spiegazione_fisiologica || "";
+    $("#morning-check-action-text").textContent = res.azione_consigliata || "";
+    action.hidden = !res.azione_consigliata;
   } catch (err) {
+    if (summary === _lastSummary) explanation.textContent = "Check del recupero non disponibile.";
     console.warn("Morning check:", err);
   }
-}
-
-function tile(icon, name, value, pct, raw) {
-  const col = barColor(raw);
-  return `<div class="metric-tile">
-    <div class="mt-icon">${icon}</div>
-    <div class="mt-name">${name}</div>
-    <div class="mt-value">${value}</div>
-    <div class="metric-bar"><i style="width:${pct}%;background:${col};box-shadow:0 0 8px ${col}"></i></div>
-  </div>`;
 }
 function renderRecent(list) {
   if (!list || !list.length) { $("#recent").classList.add("hidden"); return; }
   $("#recent").classList.remove("hidden");
   $("#recent").innerHTML = `<h2>Sessioni recenti</h2>` + list.slice(0, 4).map((a) => `
     <div class="act-row">
-      <div><b>${esc(a.data)}</b> · ${esc(a.tipo)}<br>
-        <small>${a.distanza_km} km @ ${esc(a.ritmo_medio)} · HR ${a.hr_medio ?? "—"}/${a.hr_max ?? "—"}</small></div>
+      <div><b>${esc(a.data)}</b><br>
+        <small>${metricValue(a.distanza_km, " km")} · ${esc(a.ritmo_medio || "—")}/km · FC ${metricValue(a.hr_medio)}/${metricValue(a.hr_max)}</small></div>
       <span class="tag">${esc(a.tipo || "—")}</span>
     </div>`).join("");
-  // 🏆 (v76) chiamata paritaria: la card Resoconto Post-Corsa viene ri-renderizzata
-  // anche da qui, così nessun flusso della tab Readiness può perderla.
-  renderPostRunCard(window._lastSummary || {});
 }
 /* Card allenamento del giorno: passo reale + km + durata + SYNC TO GARMIN */
 // 🏆 RESOCONTO & FEEDBACK POST-CORSA (v71): popola il contenitore DEDICATO
@@ -919,48 +935,61 @@ async function homeSync() {
     if (btnT) { btnT.disabled = false; btnT.innerHTML = "🚀 Conferma/Sync su Garmin"; }
   }
 }
+function showReadinessFeedback(message, status = "") {
+  const feedback = $("#refresh-hint");
+  feedback.textContent = message;
+  feedback.dataset.status = status;
+}
+
+function resetReadiness() {
+  _lastSummary = null;
+  CURRENT_READINESS_LEVEL = null;
+  setPill(null, null);
+  renderReadinessOverview({});
+  renderMetricsGrid({});
+  renderKarvonenAndACWR({});
+  renderRecent([]);
+  renderPostRunCard({});
+  loadMorningCheck(null, false);
+  $("#readiness-meta").textContent = "";
+  $("#user-display-name").textContent = "";
+  showReadinessFeedback("");
+}
+
 async function loadReadiness() {
+  const token = SESSION?.token;
   try {
-    const d = await api("/api/readiness");
+    const d = await api("/api/readiness", { cache: "no-store" });
+    if (token !== SESSION?.token) return null;
+    _lastSummary = d;
     CURRENT_READINESS_LEVEL = d.readiness_level;
     setPill(d.readiness_level, d.readiness_score);
-    setGauge(d.readiness_score);
+    const isToday = renderReadinessOverview(d);
     renderMetricsGrid(d);
     renderKarvonenAndACWR(d);
-    loadMorningCheck();
+    loadMorningCheck(d, isToday && Number.isFinite(d.readiness_score));
     renderRecent(d.attivita_recenti);
-    // Nome utente dinamico: atleta.nome (dal dump Garmin) -> display_name -> email
     const uname = d.atleta?.nome || d.display_name || d.email || "Atleta";
-    // Header dinamico: Nome · FC Soglia · Passo Soglia dell'utente connesso
-    const thrBits = [];
-    if (d.atleta?.fc_soglia) thrBits.push(`${d.atleta.fc_soglia} bpm`);
-    if (d.atleta?.passo_soglia) thrBits.push(String(d.atleta.passo_soglia));
-    const unameEl = $("#user-display-name");
-    if (unameEl) {
-      unameEl.textContent = thrBits.length ? `${uname} · ${thrBits.join(" · ")}` : uname;
-      unameEl.title = thrBits.length
-        ? `${uname} — FC Soglia ${thrBits[0] || "n/a"} · Passo Soglia ${thrBits[1] || "n/a"} (Garmin)`
-        : uname;
-    }
-    // Multi-account: aggiorna l'account salvato con il nome reale + contesto modale
+    $("#user-display-name").textContent = uname;
+    $("#user-display-name").title = uname;
     if (SESSION && SESSION.token) rememberAccount(d.email || SESSION.user_email, SESSION.token, uname);
-    _lastSummary = d;
-    // 🏆 (v76) CHIAMATA DIRETTA: renderPostRunCard viene invocato SUBITO dopo
-    // la risposta di /api/readiness con il payload completo (dati reali + flag
-    // workout_completed + attivita_recenti odierna + post_run_feedback).
     renderPostRunCard(d);
+    const officialThreshold = d.garmin_official_threshold || {};
+    const pace = officialThreshold.pace_sec_per_km;
     $("#readiness-meta").innerHTML = `
-      <div><b>${esc(uname)}</b>VO₂max ${d.progressi?.vo2max?.attuale ?? "—"}</div>
-      <div><b>${d.atleta?.fc_soglia ?? "—"} bpm</b>FC soglia ufficiale</div>
-      <div><b>${esc(d.atleta?.passo_soglia || "—")}</b>Passo soglia</div>`;
-    // VO₂max dinamico Garmin: stessa sorgente in Home (anello Readiness) e
-    // nello Step 1 della tab Allenamento (goal-vo2max)
+      <div><dt>VO₂max</dt><dd>${metricValue(d.garmin_vo2max)}</dd></div>
+      <div><dt>FC soglia</dt><dd>${metricValue(officialThreshold.heart_rate, " bpm")}</dd></div>
+      <div><dt>Passo soglia</dt><dd>${Number.isFinite(pace) ? fmtPace(Math.round(pace)) : "—"}</dd></div>`;
     const vo2Val = d.progressi?.vo2max?.attuale;
     const goalVo2 = $("#goal-vo2max");
     if (goalVo2) goalVo2.textContent = vo2Val != null ? vo2Val : "—";
     renderHomeWorkoutCard();
+    return d;
   } catch (err) {
-    toast(`❌ Readiness non disponibile: ${err.message}`);
+    if (token !== SESSION?.token) return null;
+    if (!_lastSummary) renderReadinessOverview({});
+    showReadinessFeedback(`Lettura dei dati non riuscita. ${err.message}`, "error");
+    return null;
   }
 }
 $("#btn-sync-home").addEventListener("click", function () {
@@ -974,23 +1003,29 @@ $("#btn-sync-home").addEventListener("click", function () {
 });
 $("#btn-refresh").addEventListener("click", async () => {
   const btn = $("#btn-refresh");
+  if (btn.disabled) return;
+  const idleLabel = btn.innerHTML;
+  const token = SESSION?.token;
   btn.disabled = true;
-  btn.innerHTML = `<span class="spin"></span> Sincronizzo Garmin (30-60s)...`;
-  $("#refresh-hint").textContent = "Estrazione live: sleep, HRV, Body Battery, laps...";
+  btn.innerHTML = '<span class="spin" aria-hidden="true"></span> Aggiornamento…';
+  showReadinessFeedback("Importazione dei dati da Garmin Connect in corso…", "loading");
   try {
     const r = await api("/api/refresh", { method: "POST" });
-    toast("✅ Dati Garmin aggiornati");
-    await loadReadiness();
+    if (token !== SESSION?.token) return;
+    const d = await loadReadiness();
+    if (!d) return;
+    const missing = r.missing_metrics ?? [];
+    if (missing.length) showReadinessFeedback(`Aggiornamento parziale. Dati mancanti: ${missing.join(", ")}.`, "partial");
+    else showReadinessFeedback("Dati Garmin aggiornati.", "ok");
     // Controllo adattivo giornaliero: Readiness attuale vs allenamento in tabella
     await checkTableDiscrepancy();
     // Sezione Allenamento: stato calendario Garmin + consiglio adattivo aggiornati
     await loadWorkoutSection();
   } catch (err) {
-    toast(`⚠️ ${err.message}`);
+    if (token === SESSION?.token) showReadinessFeedback(err.message, "error");
   } finally {
     btn.disabled = false;
-    btn.innerHTML = "🔄 Aggiorna dati Garmin (live)";
-    $("#refresh-hint").textContent = "";
+    btn.innerHTML = idleLabel;
   }
 });
 
@@ -1860,10 +1895,6 @@ $("#chat-override-no").addEventListener("click", () => {
 /* ============================ INIT ============================ */
 async function init() {
   await Promise.allSettled([loadReadiness(), loadInjuries(), loadGoals(), loadWorkoutSection(), loadTable()]);
-  try {
-    const h = await api("/api/health");
-    setPill(h.readiness?.level, h.readiness?.score);
-  } catch { /* pill già settata da loadReadiness */ }
 }
 // Avvio: se c'è una sessione salvata la verifica subito, altrimenti mostra
 // l'Onboarding "Connetti il tuo Garmin". Dopo l'auth, il consenso GDPR

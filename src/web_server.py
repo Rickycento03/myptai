@@ -51,7 +51,7 @@ from typing import List, Optional
 
 import httpx
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -1174,6 +1174,8 @@ def _load_summary(email: Optional[str] = None) -> dict:
         logger.warning(f"_load_summary: analisi per-utente fallita ({err}), uso cache SQL")
     cached = db.get_biometric(uid)
     if cached:
+        if "estimated" not in (cached.get("readiness") or {}):
+            cached["readiness"] = {}
         return _decorate_summary(cached, email)
     return _decorate_summary(copy.deepcopy(_EMPTY_SUMMARY), email)
 
@@ -1618,11 +1620,13 @@ def _post_run_feedback(summary: dict, workout: dict) -> dict:
 # Health
 # =============================================================================
 @app.get("/api/health")
-def health():
+def health(request: Request, response: Response):
+    response.headers["Cache-Control"] = "private, no-store"
     try:
-        summary = _load_summary()
+        summary = _load_summary(request.state.user_email)
         r = summary.get("readiness", {})
-        readiness = {"score": r.get("readiness_score"), "level": r.get("readiness_level")}
+        score = r.get("readiness_score")
+        readiness = {"score": score, "level": r.get("readiness_level")} if score is not None else None
     except Exception as err:  # noqa: BLE001
         logger.warning(f"health: readiness non disponibile ({err})")
         readiness = None
@@ -1639,8 +1643,9 @@ def health():
 # Readiness
 # =============================================================================
 @app.get("/api/readiness")
-def get_readiness(request: Request):
+def get_readiness(request: Request, response: Response):
     """Readiness + biometria + progressi + attività recenti (dati per-utente)."""
+    response.headers["Cache-Control"] = "private, no-store"
     email = getattr(request.state, "user_email", None)
     try:
         summary = _load_summary(email)
@@ -1655,9 +1660,18 @@ def get_readiness(request: Request):
     return {
         "display_name": summary.get("atleta", {}).get("nome"),
         "email": email,
+        "garmin_data_date": summary.get("garmin_data_date"),
+        "garmin_fetched_at": summary.get("garmin_fetched_at"),
+        "garmin_training_readiness": summary.get("garmin_training_readiness"),
+        "garmin_vo2max": summary.get("garmin_vo2max"),
+        "garmin_official_threshold": summary.get("garmin_official_threshold", {}),
+        "readiness_estimated": r.get("estimated", False),
         "readiness_score": r.get("readiness_score"),
         "readiness_level": r.get("readiness_level"),
         "components": r.get("components", {}),
+        "weights": r.get("weights", {}),
+        "hrv_calibrating": r.get("hrv_calibrating", False),
+        "rhr_reference": r.get("rhr_reference", {}),
         "rhr_adjustment_penalty": r.get("rhr_adjustment_penalty"),
         "biometria": summary.get("biometria", {}),
         "allenamento": summary.get("allenamento", {}),
@@ -1773,8 +1787,29 @@ async def refresh_garmin_data(request: Request):
         # Cache per-utente del contesto nel Database SQL (multi-dispositivo)
         if summary:
             db.save_biometric(uid or _user_id_for(email), summary)
-        return {"status": "ok", "message": "Dati Garmin aggiornati",
-                "date": date.today().isoformat()}
+        biometrics = summary.get("biometria", {})
+        threshold = summary.get("garmin_official_threshold", {})
+        readiness = summary.get("readiness", {})
+        required = {
+            "Durata sonno": biometrics.get("sonno_secondi"),
+            "Sleep Score": biometrics.get("sleep_score"),
+            "Stress notturno": biometrics.get("stress_notte"),
+            "HRV notturna": biometrics.get("hrv_last_night"),
+            "HRV settimanale": biometrics.get("hrv_weekly"),
+            "Fascia HRV personale": None if readiness.get("hrv_calibrating") else biometrics.get("hrv_baseline"),
+            "Body Battery": biometrics.get("body_battery_attuale"),
+            "FC a riposo": biometrics.get("rhr"),
+            "Riferimento FC a riposo": readiness.get("rhr_reference", {}).get("baseline_bpm"),
+            "Stress diurno": biometrics.get("stress_giorno"),
+            "VO₂max": summary.get("garmin_vo2max"),
+            "FC soglia Garmin": threshold.get("heart_rate"),
+            "Passo soglia Garmin": threshold.get("pace_sec_per_km"),
+        }
+        missing = [label for label, value in required.items() if value is None or value == {}]
+        return {"status": "partial" if missing else "ok",
+                "message": "Dati Garmin aggiornati",
+                "date": summary.get("garmin_data_date"),
+                "missing_metrics": missing}
     except HTTPException:
         raise
     except SystemExit:
@@ -2879,7 +2914,9 @@ def _compute_advice(readiness: dict, workout) -> dict:
             "level": "none", "icon": "📋",
             "message": "Nessun allenamento pianificato per oggi. Generane uno nella card qui sotto o chiedi al Coach.",
         }
-    if level == "RED" or (score is not None and score < 34):
+    if score is None:
+        return {"level": "none", "icon": "📊", "message": "Dati insufficienti per valutare la Readiness."}
+    if level == "RED" or score < 34:
         if hard:
             return {
                 "level": "lighten", "icon": "🟥",
@@ -2890,7 +2927,7 @@ def _compute_advice(readiness: dict, workout) -> dict:
             "level": "lighten", "icon": "🟥",
             "message": f"Readiness ROSSA ({score:.0f}/100): meglio una seduta molto leggera o riposo attivo.",
         }
-    if level == "AMBER" or (score is not None and 34 <= score < 67):
+    if level == "AMBER" or score < 67:
         if hard:
             return {
                 "level": "lighten", "icon": "🟨",
@@ -2901,6 +2938,8 @@ def _compute_advice(readiness: dict, workout) -> dict:
             "level": "confirm", "icon": "🟨",
             "message": f"Readiness AMBER ({score:.0f}/100): seduta moderata ok, ma resta prudente sui ritmi.",
         }
+    if readiness.get("estimated"):
+        return {"level": "confirm", "icon": "🟨", "message": f"Readiness provvisoria ({score:.0f}/100)."}
     # GREEN
     if not hard:
         return {
