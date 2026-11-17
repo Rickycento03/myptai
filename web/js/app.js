@@ -584,21 +584,12 @@ function renderReadinessOverview(d) {
   quality.hidden = notices.length === 0;
 
   const weights = d.weights || {};
-  const componentLabels = { hrv: "HRV", sleep: "Sonno", body_battery: "Body Battery", rest: "Stress notturno" };
+  const componentLabels = { sleep: "Sonno", hrv: "HRV notturna", hrv_weekly: "HRV settimanale", body_battery: "Body Battery attuale" };
   const components = Object.entries(componentLabels)
     .filter(([name]) => Number.isFinite(weights[name]))
     .map(([name, label]) => `${label} ${metricValue(weights[name] * 100, "%")}`);
   $("#readiness-method").hidden = !hasScore || components.length === 0;
-  const penalty = d.rhr_adjustment_penalty;
-  const reference = d.rhr_reference || {};
-  const limit = reference.baseline_bpm + reference.tolerance_bpm;
-  const method = [components.join(" · ") + "."];
-  if (Number.isFinite(weights.body_battery)) method.push("Body Battery usa il 70% del valore attuale e il 30% del picco.");
-  if (Number.isFinite(reference.baseline_bpm)) {
-    method.push(`La correzione per la FC a riposo scatta oltre ${metricValue(limit, " bpm")}.`);
-    if (penalty > 0) method.push(`Oggi ha sottratto ${metricValue(penalty)} punti.`);
-  }
-  $("#readiness-weights").textContent = method.join(" ");
+  $("#readiness-weights").textContent = components.join(" · ") + ".";
   return isToday;
 }
 

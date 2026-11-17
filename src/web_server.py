@@ -1174,7 +1174,7 @@ def _load_summary(email: Optional[str] = None) -> dict:
         logger.warning(f"_load_summary: analisi per-utente fallita ({err}), uso cache SQL")
     cached = db.get_biometric(uid)
     if cached:
-        if "estimated" not in (cached.get("readiness") or {}):
+        if "hrv_weekly" not in ((cached.get("readiness") or {}).get("components") or {}):
             cached["readiness"] = {}
         return _decorate_summary(cached, email)
     return _decorate_summary(copy.deepcopy(_EMPTY_SUMMARY), email)
@@ -1799,7 +1799,6 @@ async def refresh_garmin_data(request: Request):
             "Fascia HRV personale": None if readiness.get("hrv_calibrating") else biometrics.get("hrv_baseline"),
             "Body Battery": biometrics.get("body_battery_attuale"),
             "FC a riposo": biometrics.get("rhr"),
-            "Riferimento FC a riposo": readiness.get("rhr_reference", {}).get("baseline_bpm"),
             "Stress diurno": biometrics.get("stress_giorno"),
             "VO₂max": summary.get("garmin_vo2max"),
             "FC soglia Garmin": threshold.get("heart_rate"),

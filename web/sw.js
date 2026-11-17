@@ -5,13 +5,13 @@
    - Altre API GET: network-first con fallback su cache
    Requisito: HTTPS o localhost (secure context) per la registrazione.
    ============================================================================= */
-const CACHE = "garmin-coach-v97";
+const CACHE = "garmin-coach-v98";
 const PRECACHE = [
   "/",
   "/index.html",
   "/manifest.json",
   "/css/style.css?v=95",
-  "/js/app.js?v=97",
+  "/js/app.js?v=98",
   "/img/logo.svg?v=92",
 ];
 
