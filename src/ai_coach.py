@@ -79,7 +79,7 @@ Ogni workout DEVE seguire ESATTAMENTE questo schema:
   "fasi": [
     {"tipo": "warmup|easy_run|repeat|interval|tempo|progression|recovery|cooldown",
      "durata_s": 600, "distanza_m": 1500, "zona": "Z2", "ritmo": "5:45/km",
-     "hr_target": [124, 141], "ripetizioni": null, "recupero_s": null, "note": "stringa"}
+     "hr_target": [118, 136], "ripetizioni": null, "recupero_s": null, "note": "stringa"}
   ],
   "note": "stringa"
 }
@@ -98,12 +98,13 @@ REGOLE:
 
 class AICoach:
     def __init__(self, config: dict = None, summary: dict = None):
-        self.config = config or self._load(CONFIG_PATH)
-        self.summary = summary or self._load(SUMMARY_PATH)
+        self.config = config if config is not None else self._load(CONFIG_PATH)
+        self.summary = summary if summary is not None else self._load(SUMMARY_PATH)
         ds = self.config.get("deepseek", {})
         self.api_key = ds["api_key"]
         self.model = ds.get("model", "deepseek-v4-flash")
         self.base_url = ds.get("base_url", "https://api.deepseek.com")
+        self.provider_budget = None  # set by bounded multi-week generation
 
     @staticmethod
     def _load(path: Path) -> dict:
@@ -142,7 +143,6 @@ class AICoach:
         prog = s.get("progressi", {})
         ctx = {
             "atleta": {
-                "nome": atl.get("nome"),
                 "eta": atl.get("eta"),
                 "fc_max": atl.get("fc_max"),
                 "fc_soglia": atl.get("fc_soglia"),
@@ -329,7 +329,7 @@ SCHEMA JSON DA RESTITUIRE:
     def build_prompt(self, user_request: str = None, override: bool = False) -> list:
         """Costruisce i messaggi [system, user] per l'API."""
         request = (user_request or "Proponi l'allenamento di oggi più adatto alla condizione attuale dell'atleta.")
-        compact = json.dumps(self.summary, ensure_ascii=False, indent=1)
+        compact = self.build_compact_context()
         readiness_level = (self.summary.get("readiness") or {}).get("readiness_level")
         if override:
             override_note = (
@@ -551,6 +551,11 @@ SCHEMA JSON DA RESTITUIRE:
     # ------------------------------------------------------------------ API
     def _call_api(self, messages: list, temperature: float, max_tokens: int) -> dict:
         """Chiamata raw all'API DeepSeek."""
+        if self.provider_budget is not None:
+            if self.provider_budget["calls"] <= 0 or self.provider_budget["tokens"] < max_tokens:
+                raise RuntimeError("Limite di elaborazione della tabella raggiunto")
+            self.provider_budget["calls"] -= 1
+            self.provider_budget["tokens"] -= max_tokens
         r = httpx.post(
             f"{self.base_url}/chat/completions",
             headers={"Authorization": f"Bearer {self.api_key}",

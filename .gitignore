@@ -33,3 +33,12 @@ env/
 .DS_Store
 .vscode/
 .idea/
+
+# Private calibration and local handoff material
+.codex/
+releases/
+LEGGIMI_PER_CHATGPT.md
+DATI_VPS_E_COMANDI.md
+docs/ENERGIA_PERSONALE_PROTOTIPO.md
+docs/energia_personale/
+garmin_raw_dump*.json

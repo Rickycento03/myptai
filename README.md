@@ -18,8 +18,8 @@
 - **⚡ 1-Tap Sync to Garmin**: Generazione automatica di workout strutturati (`ExecutableStepDTO`) e push sul calendario Garmin Connect compatibili al 100% con orologi Garmin Fenix/Forerunner.
 - **🩹 Injury Lab 3.0**: Mappatura anatomica dei fastidi muscolari con stima percentuale dell'impatto biomeccanico sulla corsa.
 - **🛡️ Sicurezza Enterprise & Privacy GDPR**:
-  - Architettura **Zero-Knowledge** (nessun salvataggio delle password su disco).
-  - Crittografia a riposo **AES-256-GCM**.
+  - Le password del login web non vengono salvate in chiaro. Un verificatore non reversibile, cifrato e legato all’account, permette gli accessi successivi per un massimo di 30 giorni; le sessioni non ne estendono la scadenza. La configurazione privata del server può contenere credenziali amministrative.
+  - Token MyPTAI e token Garmin nel database cifrati con **AES-256-GCM**; SQLite/JSON biometrici e copie locali dei token protetti dai permessi del server.
   - Rate limiting anti-brute force e security headers (CSP, HSTS, X-Frame-Options DENY).
   - Diritto all'oblio in 1-click (Art. 17 GDPR).
 
@@ -81,3 +81,14 @@ graph TD
 ## 📄 Licenza
 
 Distribuito sotto licenza MIT.
+
+## Verifiche locali
+
+Usare una copia di sviluppo con configurazione di esempio, senza credenziali reali.
+
+```bash
+python -m unittest discover -s tests -v
+node tests/security_browser.test.js
+```
+
+I test di sicurezza usano dati sintetici e integrazioni simulate. Il bot Telegram richiede ID numerici espliciti in `telegram.allowed_chat_ids` e consenso dell’account configurato; una lista vuota impedisce l’accesso.

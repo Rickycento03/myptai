@@ -5,10 +5,10 @@ After=network-online.target
 Wants=network-online.target
 
 [Service]
+UMask=0077
 Type=simple
-# Stesso utente del bot (ubuntu): condivide il tokenstore Garmin
-# (/home/ubuntu/.garminconnect_session_r_centofanti03_gmail_com) e la scrittura
-# su /opt/garmin-ai-coach-bot (workout_plan.json, garmin_raw_dump.json, data/).
+# Identità di servizio con accesso alle sole directory private dell’app.
+# Sessioni Garmin e file sono isolati e associati al singolo account.
 User=ubuntu
 Group=ubuntu
 WorkingDirectory=/opt/garmin-ai-coach-bot

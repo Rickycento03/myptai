@@ -12,7 +12,7 @@ direttamente sul calendario dell'atleta:
   Garmin Workout JSON:
     - fase singola  -> ExecutableStepDTO (warmup/interval/recovery/cooldown/main)
     - ripetute      -> RepeatGroupDTO (interval + recovery, numberOfIterations)
-    - target zona   -> heart.rate.zone (Z1-Z5 di Riccardo da config.json)
+    - target zona   -> heart.rate.zone (Z1-Z5 dell’atleta da config.json)
     - durata/distanza -> endCondition TIME/DISTANCE
       |
       v
@@ -85,11 +85,11 @@ ZONE_TO_NUMBER = {"Z1": 1, "Z2": 2, "Z3": 3, "Z4": 4, "Z5": 5}
 ZONE_NUMBER_TO_LABEL = {1: "Z1", 2: "Z2", 3: "Z3", 4: "Z4", 5: "Z5"}
 
 # ---------------------------------------------------------------------------
-# MAPPATURA ESATTA ZONE GARMIN DI RICCARDO (da AGENTS.md / screenshot Garmin):
-#   1) Corsa Lenta / Main Easy Run  -> Garmin ZONA 3 (zoneNumber: 3, HR 142-158)
-#   2) Soglia / Ripetute            -> Garmin ZONA 4 (zoneNumber: 4, FC 176, ~4:44/km)
-#   3) Massimale / Sprint           -> Garmin ZONA 5 (zoneNumber: 5, FC Max 200)
-#   4) Recupero / Defaticamento     -> Garmin ZONA 1 o ZONA 2 (HR 114-141)
+# MAPPATURA ESATTA ZONE GARMIN DELL’ATLETA (da AGENTS.md / screenshot Garmin):
+#   1) Corsa Lenta / Main Easy Run  -> Garmin ZONA 3 (zoneNumber: 3, fascia personale)
+#   2) Soglia / Ripetute            -> Garmin ZONA 4 (zoneNumber: 4, soglia ufficiale del contesto)
+#   3) Massimale / Sprint           -> Garmin ZONA 5 (zoneNumber: 5, FC Max personale)
+#   4) Recupero / Defaticamento     -> Garmin ZONA 1 o ZONA 2 (fasce personali)
 # La mappatura è per TIPO DI FASE: l'etichetta zona dell'AI (es. "Z2" sulle
 # easy run) NON va usata 1:1, altrimenti la Corsa Lenta finisce in Zona 2.
 # ---------------------------------------------------------------------------
@@ -129,7 +129,7 @@ STEP_DESC_MAX = 60     # limite description di ogni step
 class WorkoutConverter:
     """Converte un piano AI (dict di workout_plan.json) nel payload Garmin.
 
-    Le zone HR target usano la mappatura esatta di Riccardo per tipo di fase
+    Le zone HR target usano la mappatura esatta dell’atleta per tipo di fase
     (PHASE_TO_GARMIN_ZONE), NON l'etichetta zona dell'AI.
     """
 
@@ -152,10 +152,10 @@ class WorkoutConverter:
         return ordered
 
     def _garmin_zone_number(self, fase: dict):
-        """Numero zona Garmin per la fase, con la mappatura esatta di Riccardo.
+        """Numero zona Garmin per la fase, con la mappatura esatta dell’atleta.
 
         Priorità:
-        1. zona AI "Z5" su fasi dure -> ZONA 5 (massimale/sprint, FC Max 200);
+        1. zona AI "Z5" su fasi dure -> ZONA 5 (massimale/sprint, FC Max personale);
         2. tipo di fase -> PHASE_TO_GARMIN_ZONE (easy_run=3, soglia/ripetute=4, ...);
         3. fallback: etichetta zona AI 1:1.
         """
@@ -379,7 +379,7 @@ class WorkoutConverter:
 
     @staticmethod
     def _pace_to_sec(ritmo: str):
-        """'4:44/km' -> 284 (secondi al km)."""
+        """'5:00/km' -> 300 (esempio sintetico in secondi al km)."""
         m = WorkoutConverter.PACE_RE.match(ritmo or "")
         return int(m.group(1)) * 60 + int(m.group(2)) if m else None
 
@@ -478,36 +478,23 @@ class WorkoutSync:
     def client(self):
         """Garmin() autenticato (tokenstore se disponibile, altrimenti login diretto)."""
         if self._client is None:
-            from garminconnect import Garmin
+            from garmin_probe import build_client
 
             garmin = self.config.get("garmin", {})
             email, password = garmin.get("email"), garmin.get("password")
-            if not email or not password:
+            if not email:
                 raise RuntimeError("Credenziali Garmin mancanti in config.json")
 
             tokenstore = garmin.get("tokenstore_path") or self._default_tokenstore(email)
             tokenstore = os.path.expanduser(tokenstore)
 
-            client = Garmin(email, password)
-            if os.path.exists(tokenstore):
-                print(f"  ➜ Login tramite tokenstore ({tokenstore})...")
-                try:
-                    client.login(tokenstore)
-                except Exception as err:
-                    print(f"  ⚠️ Tokenstore non valido ({err}), login diretto...")
-                    client.login()
-                    client.garth.dump(tokenstore)
-            else:
-                print(f"  ℹ️ Login diretto (nessun tokenstore in {tokenstore})...")
-                client.login()
-                client.garth.dump(tokenstore)
-            self._client = client
+            self._client = build_client(email, password or "", tokenstore)
         return self._client
 
     @staticmethod
     def _default_tokenstore(email: str) -> str:
-        clean = email.lower().replace("@", "_").replace(".", "_")
-        return f"~/.garminconnect_session_{clean}"
+        from garmin_probe import tokenstore_path
+        return str(tokenstore_path(email))
 
     # ------------------------------------------------------------------ API
     def _api(self, method: str, path: str, **kwargs):

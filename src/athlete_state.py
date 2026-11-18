@@ -16,6 +16,7 @@ import logging
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+from user_storage import user_dir, owner_email, legacy_paths, migrate_owner_file, write_private_json
 
 logger = logging.getLogger("athlete_state")
 
@@ -25,78 +26,19 @@ USERS_DIR = DATA_DIR / "users"
 MASTER_MEMORY_PATH = DATA_DIR / "athlete_state.json"
 FALLBACK_COACH_MEMORY = PROJECT_ROOT / "coach_memory.json"
 
-DEFAULT_STATE_TEMPLATE = {
-    "profilo_atleta": {
-        "id": "usr_ricky01",
-        "nome": "Riccardo",
-        "dispositivo": "Garmin Fenix 6X Pro Solar",
-        "distanza_target": "21.097km",
-        "tempo_obiettivo": "1:35:00",
-        "passo_target_km": "4:30/km",
-        "pb": {
-            "1k": "3:54",
-            "5k": "21:51",
-            "10k": "44:54",
-            "21k": "1:39:27"
-        },
-        "fisiologia_cardiaca": {
-            "fc_max": 200,
-            "fc_riposo_baseline": 50,
-            "riserva_cardiaca_hrr": 150,
-            "metodo_calcolo": "Karvonen",
-            "zone_bpm": {
-                "Z1": {"min": 125, "max": 140, "label": "Recupero Attivo / Spurgo", "pct": "50-60%"},
-                "Z2": {"min": 140, "max": 155, "label": "Endurance Aerobica Pura", "pct": "60-70%"},
-                "Z3": {"min": 155, "max": 170, "label": "Medio / Tempo Run", "pct": "70-80%"},
-                "Z4": {"min": 170, "max": 185, "label": "Soglia Anaerobica / Ritmo Gara", "pct": "80-90%"},
-                "Z5": {"min": 185, "max": 200, "label": "VO2Max / Massimale", "pct": "90-100%"}
-            }
-        }
-    },
-    "stato_fisiologico_live": {
-        "data_rilevazione": str(date.today()),
-        "training_status": "BALANCED",
-        "training_status_code": 1,
-        "vo2max": 54.2,
-        "carico_acuto_7g": 520.0,
-        "carico_cronico_28g": 252.0,
-        "acwr": 1.15,
-        "acwr_status": "SWEET_SPOT",
-        "bilanciamento_carico": {
-            "aerobico_basso": 462.8,
-            "aerobico_alto": 322.5,
-            "anaerobico": 95.9,
-            "focus": "BALANCED"
-        },
-        "recovery_metrics": {
-            "body_battery_attuale": 65,
-            "body_battery_max_mattina": 85,
-            "sonno_score": 78,
-            "sonno_ore": 7.5,
-            "sonno_fasi_minuti": {"deep": 65, "rem": 95, "light": 260, "awake": 30},
-            "hrv_status": "BALANCED",
-            "hrv_last_night_ms": 62,
-            "hrv_weekly_avg_ms": 64,
-            "hrv_baseline_range": "54-115",
-            "fc_riposo_odierna": 50,
-            "tempo_recupero_consigliato_ore": 0
-        }
-    },
-    "piano_settimanale": {
-        "macrociclo": "Preparazione Mezza Maratona",
-        "settimana": 1,
-        "focus_settimanale": "Costruzione Aerobica e Ritmo Gara",
-        "km_target_settimana": 40.0,
-        "km_completati_settimana": 0.0,
-        "giorni": []
-    },
-    "log_infortuni_e_fastidi": [],
-    "note_soggettive_e_stile_vita": {
-        "abitudini_rilevanti": "Occasionali serate sociali nel weekend con alcol/fumo che deprimono HRV notturno e ritardano il sonno",
-        "clima_sensibilita": "Sensibile alle temperature estive elevate (>28°C alza la FC di +8-10 bpm a parità di passo)",
-        "feedback_atleta_richiesto": "Vuole coaching severo, senza complimenti gratuiti, focalizzato su ritmo e biomeccanica."
-    }
-}
+# Personal values are supplied by private state/configuration and Garmin.
+DEFAULT_STATE_TEMPLATE = {'profilo_atleta': {'id': None,
+                    'nome': '',
+                    'dispositivo': None,
+                    'distanza_target': None,
+                    'tempo_obiettivo': None,
+                    'passo_target_km': None,
+                    'pb': {},
+                    'fisiologia_cardiaca': {}},
+ 'stato_fisiologico_live': {},
+ 'piano_settimanale': {},
+ 'log_infortuni_e_fastidi': [],
+ 'note_soggettive_e_stile_vita': {}}
 
 
 def calculate_karvonen_zones(max_hr: int, rhr_baseline: int) -> Dict[str, Any]:
@@ -156,12 +98,15 @@ def classify_acwr(acwr: float, crash_block: bool = False) -> str:
 
 
 def _user_memory_path(user_email: Optional[str] = None) -> Path:
-    if not user_email:
-        return MASTER_MEMORY_PATH
-    sanitized = "".join(c if c.isalnum() or c in "._-" else "_" for c in user_email.lower())
-    user_dir = USERS_DIR / sanitized
-    user_dir.mkdir(parents=True, exist_ok=True)
-    return user_dir / "athlete_state.json"
+    email = user_email or owner_email()
+    if not email:
+        raise ValueError("Account required for athlete memory")
+    path = user_dir(email) / "athlete_state.json"
+    old = legacy_paths(email)
+    migrate_owner_file(email, path, [old["memory"] / "athlete_state.json",
+                                   old["web"] / "athlete_state.json", MASTER_MEMORY_PATH,
+                                   FALLBACK_COACH_MEMORY])
+    return path
 
 
 def load_athlete_state(user_email: Optional[str] = None) -> Dict[str, Any]:
@@ -175,37 +120,24 @@ def load_athlete_state(user_email: Optional[str] = None) -> Dict[str, Any]:
         except Exception as e:
             logger.warning(f"Errore lettura athlete_state da {path}: {e}")
 
-    # Fallback su file globale o template di default
-    if MASTER_MEMORY_PATH.exists():
-        try:
-            with open(MASTER_MEMORY_PATH, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except Exception:
-            pass
-
     # Inizializza con template
     state = json.loads(json.dumps(DEFAULT_STATE_TEMPLATE))
-    if user_email:
-        state["profilo_atleta"]["id"] = user_email
+    # New accounts start with an empty profile; existing private state is kept.
+    if (user_email or owner_email()) != owner_email():
+        state = {
+            "profilo_atleta": {"id": user_email, "nome": "", "pb": {}, "fisiologia_cardiaca": {}},
+            "stato_fisiologico_live": {}, "piano_settimanale": {},
+            "log_infortuni_e_fastidi": [], "note_soggettive_e_stile_vita": {},
+        }
+    state["profilo_atleta"]["id"] = user_email or owner_email()
     save_athlete_state(state, user_email)
     return state
 
 
 def save_athlete_state(state: Dict[str, Any], user_email: Optional[str] = None) -> Path:
-    """Salva la memoria dell'atleta sia nel percorso utente che sul master se owner."""
+    """Write only the caller's namespace; legacy master is read-only migration."""
     path = _user_memory_path(user_email)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(state, f, indent=2, ensure_ascii=False)
-
-    # Mirror su master globale se è l'utente primario
-    if not user_email or "centofanti" in user_email.lower():
-        try:
-            MASTER_MEMORY_PATH.parent.mkdir(parents=True, exist_ok=True)
-            with open(MASTER_MEMORY_PATH, "w", encoding="utf-8") as f:
-                json.dump(state, f, indent=2, ensure_ascii=False)
-        except Exception as e:
-            logger.warning(f"Mirror su MASTER_MEMORY_PATH fallito: {e}")
+    write_private_json(path, state)
     return path
 
 
@@ -232,6 +164,16 @@ def sync_state_from_biometrics(summary: Dict[str, Any], user_email: Optional[str
     if summary.get("personal_records") or atleta.get("pb"):
         state["profilo_atleta"]["pb"] = summary.get("personal_records") or atleta.get("pb")
 
+    previous_live = state.get("stato_fisiologico_live", {})
+    previous_range = (previous_live.get("recovery_metrics") or {}).get("hrv_baseline_range")
+    baseline = bio.get("hrv_baseline") or {}
+    low = baseline.get("balancedLow") if isinstance(baseline, dict) else None
+    high = baseline.get("balancedUpper") if isinstance(baseline, dict) else None
+    valid_range = (isinstance(low, (int, float)) and not isinstance(low, bool)
+                   and isinstance(high, (int, float)) and not isinstance(high, bool)
+                   and 0 < low <= high)
+    hrv_range = f"{low:g}-{high:g}" if valid_range else previous_range
+
     # 2. Aggiorna Stato Fisiologico Live
     acute_load = allen.get("epoc_acuto_7gg") or allen.get("carico_aerobico_high") or 500.0
     chronic_load = allen.get("epoc_cronico_28gg") or (acute_load * 0.85) or 400.0
@@ -242,7 +184,7 @@ def sync_state_from_biometrics(summary: Dict[str, Any], user_email: Optional[str
         "data_rilevazione": str(date.today()),
         "training_status": allen.get("training_status_feedback") or "BALANCED",
         "training_status_code": 1 if "PRODUCTIVE" in str(allen.get("training_status_feedback")) else 2,
-        "vo2max": allen.get("vo2max_attuale") or atleta.get("vo2max_baseline") or 54.2,
+        "vo2max": allen.get("vo2max_attuale") or atleta.get("vo2max_baseline") or state.get("stato_fisiologico_live", {}).get("vo2max"),
         "carico_acuto_7g": float(acute_load),
         "carico_cronico_28g": float(chronic_load),
         "acwr": float(acwr_val),
@@ -267,7 +209,7 @@ def sync_state_from_biometrics(summary: Dict[str, Any], user_email: Optional[str
             "hrv_status": bio.get("hrv_status") or "BALANCED",
             "hrv_last_night_ms": bio.get("hrv_last_night") or bio.get("hrv_7n") or 55,
             "hrv_weekly_avg_ms": bio.get("hrv_weekly") or bio.get("hrv_7n") or 60,
-            "hrv_baseline_range": "54-115",
+            "hrv_baseline_range": hrv_range,
             "fc_riposo_odierna": bio.get("rhr") or rhr,
             "tempo_recupero_consigliato_ore": 0 if (readiness.get("readiness_score") or 0) > 60 else 24
         }

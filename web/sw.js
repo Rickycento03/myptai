@@ -1,17 +1,16 @@
 /* =============================================================================
    Service Worker - MyPTAI PWA
    - PRECACHE degli asset statici (cache-first)
-   - Readiness e stato della sessione: solo rete
-   - Altre API GET: network-first con fallback su cache
+   - Tutte le API personali: solo rete, senza cache né fallback
    Requisito: HTTPS o localhost (secure context) per la registrazione.
    ============================================================================= */
-const CACHE = "garmin-coach-v97";
+const CACHE = "garmin-coach-v101";
 const PRECACHE = [
   "/",
   "/index.html",
   "/manifest.json",
   "/css/style.css?v=95",
-  "/js/app.js?v=97",
+  "/js/app.js?v=101",
   "/img/logo.svg?v=92",
 ];
 
@@ -24,7 +23,13 @@ self.addEventListener("install", (event) => {
 self.addEventListener("activate", (event) => {
   event.waitUntil(
     caches.keys()
-      .then((keys) => Promise.all(keys.filter((k) => k !== CACHE).map((k) => caches.delete(k))))
+      .then((keys) => Promise.all(keys.filter((k) => k.startsWith("garmin-coach-") && k !== CACHE).map((k) => caches.delete(k))))
+      .then(async () => {
+        const cache = await caches.open(CACHE);
+        const keys = await cache.keys();
+        await Promise.all(keys.filter((req) => new URL(req.url).pathname.startsWith("/api/"))
+          .map((req) => cache.delete(req)));
+      })
       .then(() => self.clients.claim())
       .then(() => self.clients.matchAll({ type: "window" }))
       .then((clients) => clients.forEach((c) => c.postMessage({ type: "MYPTAI_NEW_VERSION" })))
@@ -33,31 +38,22 @@ self.addEventListener("activate", (event) => {
 
 self.addEventListener("fetch", (event) => {
   const req = event.request;
-  const path = new URL(req.url).pathname;
-  if (path === "/api/readiness" || path === "/api/health") return;
-  if (req.method !== "GET" || req.url.includes("/api/")) {
-    // API: network-first con fallback su cache (per usabilità offline parziale)
-    if (req.method === "GET") {
-      event.respondWith(
-        fetch(req)
-          .then((res) => {
-            const copy = res.clone();
-            caches.open(CACHE).then((c) => c.put(req, copy)).catch(() => {});
-            return res;
-          })
-          .catch(() => caches.match(req))
-      );
-    }
+  const url = new URL(req.url);
+  if (url.origin !== self.location.origin) return;
+  if (url.pathname.startsWith("/api/") || req.headers.has("Authorization")) {
+    event.respondWith(fetch(req, { cache: "no-store" }));
     return;
   }
+  const staticPaths = PRECACHE.map((path) => new URL(path, self.location.origin).pathname);
+  if (req.method !== "GET" || !staticPaths.includes(url.pathname)) return;
   // Statici: cache-first
   event.respondWith(
-    caches.match(req).then(
+    caches.open(CACHE).then((cache) => cache.match(req)).then(
       (hit) =>
         hit ||
         fetch(req).then((res) => {
           const copy = res.clone();
-          caches.open(CACHE).then((c) => c.put(req, copy)).catch(() => {});
+          if (res.ok && res.type === "basic") caches.open(CACHE).then((c) => c.put(req, copy)).catch(() => {});
           return res;
         })
     )

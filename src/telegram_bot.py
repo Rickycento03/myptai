@@ -72,10 +72,10 @@ def load_config() -> dict:
 
 
 def is_allowed(update: Update, config: dict) -> bool:
-    """Accesso ristretto agli allowed_chat_ids; vuoto = accesso aperto (dev)."""
+    """Every chat must be explicitly authorized, including development."""
     ids = config.get("telegram", {}).get("allowed_chat_ids", [])
-    if not ids:
-        return True
+    if not isinstance(ids, list) or not ids or any(type(i) is not int for i in ids):
+        return False
     chat_id = update.effective_chat.id if update.effective_chat else None
     return chat_id in ids
 
@@ -87,7 +87,7 @@ async def _guard(update: Update) -> bool:
     except Exception as err:  # noqa: BLE001
         logger.warning(f"_guard: config non leggibile ({err})")
         return False
-    if is_allowed(update, config):
+    if is_allowed(update, config) and _owner_has_consent(config):
         return True
     query = update.callback_query
     if query is not None:
@@ -95,6 +95,17 @@ async def _guard(update: Update) -> bool:
     elif update.effective_message is not None:
         await update.effective_message.reply_text("🔒 Accesso non autorizzato a questo bot.")
     return False
+
+
+def _owner_has_consent(config: dict) -> bool:
+    import database as db
+    try:
+        email = ((config.get("garmin") or {}).get("email") or "").strip().lower()
+        user = db.get_user_by_email(email)
+        consent = db.get_user_consent(user["id"]) if user else {}
+        return bool(consent.get("accepted") and consent.get("version") == "1.1")
+    except Exception:
+        return False
 
 
 # =============================================================================
@@ -354,6 +365,8 @@ async def refresh_garmin_data() -> bool:
     scaduto, credenziali mancanti) ritorna False: il bot continua con gli
     ultimi dati locali disponibili invece di crashare.
     """
+    if not _owner_has_consent(load_config()):
+        return False
     try:
         from garmin_probe import run_probe
         from analytics_engine import AnalyticsEngine
@@ -400,13 +413,17 @@ def main() -> int:
     if not token:
         print("❌ bot_token mancante in config.json")
         return 1
+    ids = telegram.get("allowed_chat_ids")
+    if not isinstance(ids, list) or not ids or any(type(i) is not int for i in ids):
+        print("❌ Configura allowed_chat_ids con gli ID numerici delle chat autorizzate")
+        return 1
 
     if args.dry_run:
         print("=" * 60)
         print("CONFIG MyPT AI BOT (dry-run)")
         print("=" * 60)
-        print(f"  bot_token: {token[:10]}...{token[-4:]}")
-        print(f"  allowed_chat_ids: {telegram.get('allowed_chat_ids') or 'TUTTI (dev)'}")
+        print("  bot_token: configurato")
+        print(f"  chat autorizzate: {len(ids)}")
         print(f"  modello AI: {config.get('deepseek', {}).get('model')}")
         print("  nessun avvio del polling.")
         return 0

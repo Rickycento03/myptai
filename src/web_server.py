@@ -19,10 +19,8 @@ Espone gli endpoint REST consumati dalla PWA mobile-first (web/):
   PWA:
     / (mount statico di web/)            -> index.html + css/js + manifest + sw
 
-REGOLA SOGLIA: FC Soglia (176 bpm) e Passo Soglia (4:44/km) sono valori UFFICIALI
-Garmin SEMPRE fissi. Le stime locali (es. lap Z4) non li sostituiscono mai:
-vengono esposte solo come confronto informativo e il prompt AI impone i valori
-ufficiali come unico riferimento di soglia.
+REGOLA SOGLIA: le soglie ufficiali dell’atleta arrivano da Garmin o dalla
+configurazione privata. Le stime locali restano confronti informativi.
 
 Avvio:
   uvicorn src.web_server:app --host 0.0.0.0 --port 8000
@@ -36,6 +34,7 @@ import hmac
 import html
 import json
 import logging
+import math
 import os
 import re
 import secrets
@@ -51,6 +50,7 @@ from typing import List, Optional
 
 import httpx
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+from cryptography.exceptions import InvalidTag
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -62,6 +62,7 @@ SRC_DIR = PROJECT_ROOT / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 import database as db  # SQLite multi-utente (data/myptai.db) — richiede src/ nel path
+import user_storage as storage
 WEB_DIR = PROJECT_ROOT / "web"
 DATA_DIR = PROJECT_ROOT / "data"
 GOALS_PATH = DATA_DIR / "goals.json"
@@ -73,6 +74,23 @@ SESSIONS_PATH = DATA_DIR / "sessions.json"
 USERS_DIR = DATA_DIR / "users"
 SECRET_KEY_ENV = "MYPTAI_SECRET_KEY"   # chiave AES-256 (env, come da requisito)
 SECRET_FILE = DATA_DIR / "secret.key"   # fallback persistente auto-generato
+SESSION_TTL_S = 30 * 24 * 3600
+SESSION_IDLE_TTL_S = 7 * 24 * 3600
+CONSENT_VERSION = "1.1"
+MAX_TABLE_DAYS = 84
+MAX_TABLE_PROVIDER_CALLS = 13
+_operation_locks = {}
+_operation_locks_guard = threading.Lock()
+
+
+def _operation_lock(uid):
+    with _operation_locks_guard:
+        return _operation_locks.setdefault(uid, threading.Lock())
+
+
+def _has_consent(uid):
+    consent = db.get_user_consent(uid)
+    return bool(consent.get("accepted") and consent.get("version") == CONSENT_VERSION)
 
 logging.basicConfig(
     format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
@@ -214,6 +232,8 @@ class _RateLimiter:
 
 _auth_limiter = _RateLimiter(limit=5, window_s=900)    # max 5 tentativi/15 min per IP
 _api_limiter = _RateLimiter(limit=60, window_s=60)     # max 60 req/min sulle API per IP
+_table_limiter = _RateLimiter(limit=3, window_s=24 * 3600)
+_login_attempt_limiter = _RateLimiter(limit=10, window_s=900)
 
 
 def _client_ip(request: Request) -> str:
@@ -257,15 +277,18 @@ def _save_sessions(sessions: dict) -> None:
     _write_json(SESSIONS_PATH, sessions)
 
 
-def _new_session(user_id: int, email: str) -> str:
-    """Crea una sessione permanente per il dispositivo. Il token è casuale
+def _new_session(user_id: int, email: str, *, proof_expires_at=None) -> str:
+    """Crea una sessione con scadenza e revoca per il dispositivo. Il token è casuale
     (256 bit) e il record di sessione viene cifrato AES-256-GCM a riposo:
     nel file resta solo l'impronta SHA-256 del token + blob cifrato.
     La sessione lega user_id (SQL) + email Garmin dell'utente."""
     token = secrets.token_urlsafe(32)
-    now = datetime.now().isoformat(timespec="seconds")
-    payload = {"token": token, "user_id": user_id, "user_email": email,
-               "created_at": now, "last_seen": now}
+    now = time.time()
+    expires = min(now + SESSION_TTL_S, proof_expires_at) if proof_expires_at is not None else now + SESSION_TTL_S
+    if expires <= now:
+        raise _GarminLoginUnavailable(1)
+    payload = {"version": 2, "token": token, "user_id": user_id, "user_email": email,
+               "created_at": now, "last_seen": now, "expires_at": expires}
     encrypted = _get_cipher().encrypt(json.dumps(payload).encode()).decode()
     with _lock:
         sessions = _load_sessions()
@@ -299,21 +322,35 @@ def _resolve_session(request: Request) -> Optional[tuple]:
         # confronto constant-time del token decifrato con quello presentato
         if not hmac.compare_digest(str(payload.get("token")), token):
             return None
+        if not isinstance(payload, dict):
+            return None
         email = payload.get("user_email")
         user_id = payload.get("user_id")
-        if not email or not user_id:
+        now = time.time()
+        timestamps = [payload.get(k) for k in ("created_at", "last_seen", "expires_at")]
+        valid_times = all(type(v) in (int, float) and math.isfinite(v) for v in timestamps)
+        user = db.get_user(user_id) if type(user_id) is int else None
+        if (payload.get("version") != 2 or not valid_times or not user
+                or user.get("email") != email
+                or not (0 < timestamps[0] <= timestamps[1] <= now + 60)
+                or timestamps[2] > timestamps[0] + SESSION_TTL_S
+                or now >= timestamps[2] or now - timestamps[1] >= SESSION_IDLE_TTL_S):
+            sessions.pop(digest, None)
+            _save_sessions(sessions)
             return None
-        now = datetime.now().isoformat(timespec="seconds")
-        if payload.get("last_seen") != now:  # riscrittura max 1 volta/secondo
+        if now - payload["last_seen"] >= 60:
             payload["last_seen"] = now
             sessions[digest] = cipher.encrypt(json.dumps(payload).encode()).decode()
             _save_sessions(sessions)
         return int(user_id), email
 
 
-@app.middleware("http")
 async def security_headers_middleware(request: Request, call_next):
     response = await call_next(request)
+    if request.url.path.startswith("/api/"):
+        response.headers["Cache-Control"] = "private, no-store"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Vary"] = "Authorization"
     response.headers["X-Frame-Options"] = "DENY"
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
@@ -341,11 +378,29 @@ async def session_auth(request: Request, call_next):
         ok, retry = _api_limiter.allow(_client_ip(request))
         if not ok:
             return _too_many(retry, "Troppe richieste: attendi qualche secondo e riprova.")
+        if path == "/api/auth" or path.startswith("/api/legal/"):
+            request.state.user_email = None
+            return await call_next(request)
         # 1) Sessione utente valida -> autorizzato, dati legati a user_id
         session = _resolve_session(request)
         if session:
             request.state.user_id, request.state.user_email = session
-            return await call_next(request)
+            lock = _operation_lock(session[0])
+            while not lock.acquire(blocking=False):
+                await asyncio.sleep(0.02)
+            try:
+                # Recheck after waiting: deletion/logout may have revoked it.
+                if not _resolve_session(request):
+                    return JSONResponse(status_code=401, content={"detail": "Sessione non valida"})
+                allowed_without_consent = path in {
+                    "/api/auth", "/api/user/me", "/api/user/consent",
+                    "/api/user/delete-account", "/api/user/logout",
+                } or path.startswith("/api/legal/")
+                if not allowed_without_consent and not _has_consent(session[0]):
+                    return JSONResponse(status_code=403, content={"detail": "consent_required"})
+                return await call_next(request)
+            finally:
+                lock.release()
         # 2) Pubbliche: /api/auth (login) e /api/legal/* (documenti legali
         #    consultabili anche prima del consenso e del login)
         if path == "/api/auth" or path.startswith("/api/legal/"):
@@ -360,6 +415,9 @@ async def session_auth(request: Request, call_next):
     return await call_next(request)
 
 
+app.middleware("http")(security_headers_middleware)
+
+
 class AuthRequest(BaseModel):
     email: str = Field(..., min_length=3, max_length=200, pattern=r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
     password: str = Field(..., min_length=1, max_length=200)
@@ -372,6 +430,168 @@ class ConsentPayload(BaseModel):
 
 class _GarminAuthError(Exception):
     """Credenziali Garmin errate o account non autorizzato."""
+
+
+class _GarminLoginUnavailable(Exception):
+    def __init__(self, retry_after=300):
+        self.retry_after = max(1, int(retry_after))
+        self.local_password_mismatch = False
+
+
+_GARMIN_LOGIN_LOCK = threading.Lock()
+_garmin_login_retry_until = 0.0
+_PASSWORD_ITERATIONS = 600000
+_PASSWORD_PROOF_TTL_S = SESSION_TTL_S
+_PASSWORD_COMPUTE_SLOTS = threading.BoundedSemaphore(2)
+
+
+def _derive_password(password, salt):
+    if not _PASSWORD_COMPUTE_SLOTS.acquire(blocking=False):
+        raise _GarminLoginUnavailable(2)
+    try:
+        return hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, _PASSWORD_ITERATIONS)
+    finally:
+        _PASSWORD_COMPUTE_SLOTS.release()
+
+
+def _save_login_verifier(uid: int, email: str, password: str) -> None:
+    previous = db.get_login_verifier(uid)
+    salt = secrets.token_bytes(32)
+    derived = _derive_password(password, salt)
+    now = time.time()
+    payload = {"version": 1, "account_key": storage.account_key(email),
+               "algorithm": "pbkdf2-sha256", "iterations": _PASSWORD_ITERATIONS,
+               "salt": base64.b64encode(salt).decode(), "derived": base64.b64encode(derived).decode(),
+               "verified_at": now, "expires_at": now + _PASSWORD_PROOF_TTL_S}
+    db.set_login_verifier(uid, _get_cipher().encrypt(json.dumps(payload).encode()))
+    if previous:
+        cipher = _get_cipher()
+        with _lock:
+            sessions = _load_sessions()
+            kept = {}
+            for digest, blob in sessions.items():
+                try:
+                    session = json.loads(cipher.decrypt(blob.encode()))
+                    if session.get("user_id") != uid:
+                        kept[digest] = blob
+                except Exception:
+                    continue
+            _save_sessions(kept)
+
+
+def _password_verified(uid: int, email: str, password: str, *, allow_expired=False) -> bool:
+    encoded = db.get_login_verifier(uid)
+    if not encoded:
+        return False
+    try:
+        payload = json.loads(_get_cipher().decrypt(encoded))
+        if (payload.get("version") != 1 or payload.get("account_key") != storage.account_key(email)
+                or payload.get("algorithm") != "pbkdf2-sha256"
+                or payload.get("iterations") != _PASSWORD_ITERATIONS):
+            return False
+        verified, expires = payload.get("verified_at"), payload.get("expires_at")
+        now = time.time()
+        if (any(type(v) not in (int, float) or not math.isfinite(v) for v in (verified, expires))
+                or verified > now + 60 or expires > verified + _PASSWORD_PROOF_TTL_S
+                or expires <= verified or (not allow_expired and now >= expires)):
+            return False
+        salt = base64.b64decode(payload["salt"], validate=True)
+        expected = base64.b64decode(payload["derived"], validate=True)
+        if len(salt) != 32 or len(expected) != 32:
+            return False
+        actual = _derive_password(password, salt)
+        return hmac.compare_digest(actual, expected)
+    except (ValueError, TypeError, KeyError, AttributeError, InvalidTag):
+        return False
+
+
+def _login_proof_expiry(uid, email):
+    payload = json.loads(_get_cipher().decrypt(db.get_login_verifier(uid)))
+    if payload.get("account_key") != storage.account_key(email):
+        raise _GarminAuthError()
+    return payload["expires_at"]
+
+
+def _restore_verified_tokens(uid: int, email: str, *, allow_legacy_owner=False) -> bool:
+    """Called only AFTER password proof; a tokenstore alone never grants login."""
+    from garmin_probe import tokenstore_path
+    encoded = db.get_user_tokens(uid)
+    if not encoded:
+        return False
+    try:
+        payload = json.loads(_get_cipher().decrypt(encoded))
+        if not isinstance(payload, dict):
+            return False
+        if payload.get("version") == 2:
+            if payload.get("account_key") != storage.account_key(email):
+                return False
+            files = payload.get("files")
+        elif allow_legacy_owner:
+            files = payload
+        else:
+            return False
+        if (not isinstance(files, dict) or not files or not set(files).issubset(storage.TOKEN_FILES)
+                or not all(isinstance(v, str) for v in files.values()) or not any(files.values())):
+            return False
+        if files.get("garmin_tokens.json"):
+            credentials = json.loads(files["garmin_tokens.json"])
+            if not isinstance(credentials, dict) or not any(credentials.get(k) for k in ("di_refresh_token", "di_token")):
+                return False
+        elif files.get("oauth2_token.json"):
+            credentials = json.loads(files["oauth2_token.json"])
+            if not isinstance(credentials, dict) or not credentials.get("access_token"):
+                return False
+        else:
+            return False
+        if payload.get("version") != 2:
+            payload = {"version": 2, "account_key": storage.account_key(email), "files": files}
+            db.set_user_tokens(uid, _get_cipher().encrypt(json.dumps(payload).encode()))
+        destination = tokenstore_path(email)
+        if not storage.tokenstore_is_bound(destination, email):
+            storage.private_dir(destination)
+            for name, content in files.items():
+                (destination / name).write_text(content, encoding="utf-8")
+            storage.bind_tokenstore(destination, email)
+        return True
+    except (ValueError, TypeError, KeyError, AttributeError, InvalidTag):
+        return False
+
+
+def _fresh_garmin_password_login(email: str, password: str):
+    global _garmin_login_retry_until
+    from garmin_probe import build_client
+    if not _GARMIN_LOGIN_LOCK.acquire(blocking=False):
+        raise _GarminLoginUnavailable(30)
+    try:
+        remaining = _garmin_login_retry_until - time.monotonic()
+        if remaining > 0:
+            raise _GarminLoginUnavailable(remaining)
+        try:
+            return build_client(email, password, require_password=True)
+        except Exception as err:
+            # Do not classify connection failures by words such as "login".
+            # Garmin uses those words for rate limits and Cloudflare failures too.
+            name = type(err).__name__
+            message = str(err).lower()
+            upstream = (any(word in message for word in ("403", "429", "cloudflare", "captcha", "rate limit", "rate-limit"))
+                        or name in ("GarminConnectConnectionError", "GarminConnectTooManyRequestsError"))
+            cause = err
+            for _ in range(5):
+                if cause is None:
+                    break
+                status = getattr(getattr(cause, "response", None), "status_code", None)
+                if status in (403, 429):
+                    upstream = True
+                cause = cause.__cause__ or cause.__context__
+            if (not upstream and ((name == "GarminConnectAuthenticationError" and "mfa" not in message
+                 and "profile" not in message and "settings" not in message)
+                    or (type(err) is ValueError and message == "invalid credentials"))):
+                raise _GarminAuthError() from err
+            _garmin_login_retry_until = time.monotonic() + 300
+            logger.warning("auth: accesso Garmin temporaneamente indisponibile (%s)", name)
+            raise _GarminLoginUnavailable(300) from err
+    finally:
+        _GARMIN_LOGIN_LOCK.release()
 
 
 def _garmin_display_name(client) -> Optional[str]:
@@ -407,40 +627,38 @@ def _tokenstore_expired(tokens_enc: bytes, margin_s: int = 60) -> bool:
 
 
 def _garmin_login_register(email: str, password: str) -> int:
-    """Login LIVE su Garmin Connect + registrazione/aggiornamento utente nel
-    Database SQL + salvataggio del tokenstore cifrato AES-256-GCM (la password
-    NON viene mai salvata). Ritorna user_id.
-    Qualsiasi account Garmin valido può accedere (multi-utente: Riccardo,
-    fratello, amici, clienti)."""
-    from garmin_probe import build_client
-
+    """Verify a previously enrolled password or perform fresh Garmin enrollment.
+    Only nonreversible, encrypted password verifiers are stored for web logins.
+    Qualsiasi account Garmin valido può accedere con i propri dati isolati."""
     email = email.strip().lower()
-    password = password.strip()
+    local_mismatch = False
+    user = db.get_user_by_email(email)
+    if user:
+        uid = int(user["id"])
+        if _password_verified(uid, email, password) and _restore_verified_tokens(uid, email):
+            return db.upsert_user(email)
+        if db.get_login_verifier(uid):
+            local_mismatch = not _password_verified(uid, email, password, allow_expired=True)
+        # One-time upgrade for the explicitly configured administrator only.
+        # This uses the existing private password as proof, never the email or
+        # an unbound token file as proof. Other accounts cannot enter this path.
+        if not db.get_login_verifier(uid):
+            configured = _load_config().get("garmin") or {}
+            owner = (configured.get("email") or "").strip().lower()
+            expected = configured.get("password")
+            if (email == owner and isinstance(expected, str) and expected
+                    and hmac.compare_digest(password.encode("utf-8"), expected.encode("utf-8"))
+                    and _restore_verified_tokens(uid, email, allow_legacy_owner=True)):
+                _save_login_verifier(uid, email, password)
+                return db.upsert_user(email)
     tmp_dir = Path(tempfile.mkdtemp(prefix="myptai_ts_"))
     try:
-        # 1) Tokenstore già salvato (DB cifrato): ripristino senza re-login SSO
-        #    SOLO se il token oauth2 è ancora valido (pre-check locale, zero rete).
-        #    Se scaduto -> fallback IMMEDIATO al login diretto, senza attendere
-        #    il refresh di token storici (garanzia risposta < 2s).
-        user = db.get_user_by_email(email)
-        if user and user.get("tokens_enc") and not _tokenstore_expired(user["tokens_enc"]):
-            try:
-                ts_dir = _write_garmin_token_dir(user["tokens_enc"], tmp_dir, email)
-                client = build_client(email, password, str(ts_dir))
-                display = _garmin_display_name(client)
-                uid = db.upsert_user(email, display)
-                _save_garth_tokens(uid, client, tmp_dir)  # aggiorna il tokenstore cifrato
-                _save_permanent_tokenstore(client, email)  # sessione anche su disco permanente
-                return uid
-            except _GarminAuthError:
-                raise
-            except Exception as err:  # noqa: BLE001 (tokenstore invalido a runtime)
-                logger.info(f"auth: tokenstore non riutilizzabile per {email} ({err}), login diretto")
-        elif user and user.get("tokens_enc"):
-            logger.info(f"auth: tokenstore scaduto per {email} -> login diretto immediato (zero attese)")
-
-        # 2) Login diretto SSO Garmin con le credenziali appena inserite
-        client = build_client(email, password, None)
+        # Every new application session requires an independent password proof.
+        try:
+            client = _fresh_garmin_password_login(email, password)
+        except _GarminLoginUnavailable as err:
+            err.local_password_mismatch = local_mismatch
+            raise
         display = _garmin_display_name(client)
         uid = db.upsert_user(email, display)
         # Salva il tokenstore della sessione Garmin, cifrato AES-256-GCM
@@ -449,6 +667,7 @@ def _garmin_login_register(email: str, password: str) -> int:
         except Exception as err:  # noqa: BLE001
             logger.warning(f"auth: salvataggio tokenstore cifrato fallito ({err})")
         _save_permanent_tokenstore(client, email)  # sessione anche su disco permanente
+        _save_login_verifier(uid, email, password)
         return uid
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)
@@ -461,7 +680,7 @@ def _dump_client_tokens(client, dest_dir: Path) -> dict:
     - versioni garth legacy (client.garth.dump -> oauth1/oauth2_token.json).
     Ritorna il payload {nome_file: contenuto} da cifrare nel DB."""
     payload: dict = {}
-    dest_dir.mkdir(parents=True, exist_ok=True)
+    storage.private_dir(dest_dir)
     inner = getattr(client, "client", None)
     if inner is not None and hasattr(inner, "dump"):
         try:
@@ -478,6 +697,9 @@ def _dump_client_tokens(client, dest_dir: Path) -> dict:
         for name in ("oauth1_token.json", "oauth2_token.json"):
             p = dest_dir / name
             payload[name] = p.read_text(encoding="utf-8") if p.exists() else ""
+    for name in storage.TOKEN_FILES:
+        if (dest_dir / name).is_file():
+            (dest_dir / name).chmod(0o600)
     return payload
 
 
@@ -490,7 +712,9 @@ def _save_garth_tokens(uid: int, client, tmp_dir: Path) -> None:
         ts_dir.mkdir(parents=True, exist_ok=True)  # garantisce la cartella del tokenstore
         payload = _dump_client_tokens(client, ts_dir)
         if payload.get("garmin_tokens.json") or payload.get("oauth2_token.json"):
-            db.set_user_tokens(uid, _get_cipher().encrypt(json.dumps(payload).encode()))
+            user = db.get_user(uid)
+            envelope = {"version": 2, "account_key": storage.account_key(user["email"]), "files": payload}
+            db.set_user_tokens(uid, _get_cipher().encrypt(json.dumps(envelope).encode()))
     except Exception as err:  # noqa: BLE001
         logger.warning(f"garth tokenstore non salvabile: {err}")
 
@@ -501,21 +725,18 @@ def _write_garmin_token_dir(tokens_enc: bytes, base_dir: Path, email: Optional[s
     client.login / garth.load). Se email e' fornito, ripristina il tokenstore
     ANCHE nel percorso permanente per-utente tokenstore_path(email)."""
     ts_dir = base_dir / "session"
-    ts_dir.mkdir(parents=True, exist_ok=True)
+    storage.private_dir(ts_dir)
     payload = json.loads(_get_cipher().decrypt(bytes(tokens_enc)))
+    if not email or payload.get("version") != 2 or payload.get("account_key") != storage.account_key(email):
+        raise ValueError("Garmin token identity unavailable: sign in again")
+    payload = payload.get("files")
+    if not isinstance(payload, dict) or not set(payload).issubset(storage.TOKEN_FILES):
+        raise ValueError("Invalid Garmin token files")
     for name, content in payload.items():
-        if name.endswith(".json"):
-            (ts_dir / name).write_text(content or "", encoding="utf-8")
-    if email:
-        try:
-            from garmin_probe import tokenstore_path
-            ts_perm = tokenstore_path(email)
-            ts_perm.parent.mkdir(parents=True, exist_ok=True)
-            for name, content in payload.items():
-                if name.endswith(".json"):
-                    (ts_perm / name).write_text(content or "", encoding="utf-8")
-        except Exception as err:  # noqa: BLE001
-            logger.warning(f"tokenstore permanente non ripristinabile per {email}: {err}")
+        if not isinstance(content, str):
+            raise ValueError("Invalid Garmin token content")
+        (ts_dir / name).write_text(content, encoding="utf-8")
+    storage.bind_tokenstore(ts_dir, email)
     return ts_dir
 
 
@@ -530,13 +751,21 @@ def _save_permanent_tokenstore(client, email: str) -> None:
     try:
         from garmin_probe import tokenstore_path
         ts_perm = tokenstore_path(email)
-        ts_perm.parent.mkdir(parents=True, exist_ok=True)
         _dump_client_tokens(client, ts_perm)
+        storage.bind_tokenstore(ts_perm, email)
     except Exception as err:  # noqa: BLE001
         logger.warning(f"auth: tokenstore permanente non salvabile per {email}: {err}")
 
 
 def _initial_biometric_extract(uid: int, email: str, password: str = "") -> None:
+    with _operation_lock(uid):
+        user = db.get_user(uid)
+        if not user or user.get("email") != email or not _has_consent(uid):
+            return
+        _initial_biometric_extract_locked(uid, email, password)
+
+
+def _initial_biometric_extract_locked(uid: int, email: str, password: str = "") -> None:
     """Estrazione live completa IMMEDIATA dopo il login (multi-utente):
     run_probe(email, password, str(tokenstore_path(email)), per_user_dump_path(email))
     genera data/dumps/garmin_raw_dump_{slug}.json e popola la biometria nel DB
@@ -570,8 +799,35 @@ def _initial_biometric_extract(uid: int, email: str, password: str = "") -> None
 
 @app.post("/api/auth")
 def auth(payload: AuthRequest, request: Request):
-    """Onboarding APERTO A CHIUNQUE (multi-utente): valida le credenziali LIVE
-    su Garmin Connect via Garmin(email, password).login(). Se la login riesce:
+    ip = _client_ip(request)
+    allowed, retry = _login_attempt_limiter.allow(ip)
+    if not allowed:
+        return _too_many(retry, "Troppi tentativi di accesso: riprova tra qualche minuto.")
+    email = payload.email.strip().lower()
+    account_lock = _operation_lock(("login", storage.account_key(email)))
+    if not account_lock.acquire(blocking=False):
+        return JSONResponse(status_code=503, headers={"Retry-After": "2"},
+                            content={"detail": "Un accesso a questo account è già in corso.", "retry_after_s": 2})
+    user_lock = None
+    try:
+        user = db.get_user_by_email(email)
+        if user:
+            user_lock = _operation_lock(int(user["id"]))
+            if not user_lock.acquire(blocking=False):
+                user_lock = None
+                return JSONResponse(status_code=503, headers={"Retry-After": "2"},
+                                    content={"detail": "Aggiornamento account in corso.", "retry_after_s": 2})
+        return _auth_locked(payload, request)
+    finally:
+        if user_lock:
+            user_lock.release()
+        account_lock.release()
+
+
+def _auth_locked(payload: AuthRequest, request: Request):
+    """Onboarding multiutente: enrollment Garmin o password già verificata.
+    Nessuna sessione viene emessa usando soltanto email e token Garmin.
+    Se la verifica riesce:
     crea/aggiorna l'utente nel Database SQL, salva i token Garmin cifrati in
     AES-256-GCM e rilascia il Bearer token di sessione (user_id + email).
     Rate limiting anti brute-force: max 5 tentativi / 15 min (900 s) per IP.
@@ -589,30 +845,29 @@ def auth(payload: AuthRequest, request: Request):
             headers={"Retry-After": str(retry)},
         )
     email = (payload.email or "").strip().lower()
-    password = (payload.password or "").strip()
+    password = payload.password or ""
     try:
         user_id = _garmin_login_register(email, password)
-    except Exception as err:  # noqa: BLE001
-        msg = str(err).lower()
-        if any(k in msg for k in ("password", "credential", "login", "unauthorized",
-                                  "invalid", "401", "not found", "access denied")):
-            _auth_limiter.record(ip)  # SOLO credenziali errate: conta come tentativo
-            raise HTTPException(status_code=401,
-                                detail="Credenziali Garmin non valide: verifica email e password.")
-        # Garmin irraggiungibile/errore infrastrutturale: NON consuma tentativi
-        logger.warning(f"auth: errore Garmin per {email}: {err}")
+        token = _new_session(user_id, email, proof_expires_at=_login_proof_expiry(user_id, email))
+    except _GarminAuthError:
+        _auth_limiter.record(ip)
+        raise HTTPException(status_code=401,
+                            detail="Credenziali Garmin non valide: verifica email e password.")
+    except _GarminLoginUnavailable as err:
+        if err.local_password_mismatch:
+            _auth_limiter.record(ip)
+        return JSONResponse(status_code=503, headers={"Retry-After": str(err.retry_after)}, content={
+            "detail": "Garmin sta limitando temporaneamente gli accessi dal server. Riprova tra qualche minuto.",
+            "retry_after_s": err.retry_after})
+    except Exception as err:
+        logger.warning("auth: servizio Garmin non disponibile (%s)", type(err).__name__)
         raise HTTPException(status_code=502,
                             detail="Garmin Connect non raggiungibile: riprova tra poco.")
-    token = _new_session(user_id, email)
     # Estrazione live completa IMMEDIATA dopo il login (multi-utente): parte in
     # background con run_probe(email, password, tokenstore_path(email), dump_path)
     # e popola subito la biometria (db.save_biometric) senza rallentare il login.
-    threading.Thread(
-        target=_initial_biometric_extract,
-        args=(user_id, email, password),
-        daemon=True,
-        name=f"myptai-init-bio-{user_id}",
-    ).start()
+    if _has_consent(user_id):
+        _start_biometric_extract(user_id, email)
     return {
         "status": "ok",
         "token": token,
@@ -639,7 +894,12 @@ def user_consent(payload: ConsentPayload, request: Request):
     """Registra il consenso al trattamento dei dati (Art. 6-7 GDPR)."""
     email = getattr(request.state, "user_email", None)
     uid = getattr(request.state, "user_id", None)
+    if payload.accepted and payload.version != CONSENT_VERSION:
+        raise HTTPException(status_code=400, detail="Versione del consenso non valida")
+    had_consent = _has_consent(uid)
     db.set_user_consent(uid, payload.version, bool(payload.accepted))
+    if payload.accepted and not had_consent:
+        _start_biometric_extract(uid, email)
     record = {
         "email": email,
         "accepted": bool(payload.accepted),
@@ -650,6 +910,63 @@ def user_consent(payload: ConsentPayload, request: Request):
     return {"status": "ok", "consent": record}
 
 
+def _start_biometric_extract(uid: int, email: str) -> None:
+    threading.Thread(target=_initial_biometric_extract, args=(uid, email),
+                     daemon=True, name=f"myptai-init-bio-{uid}").start()
+
+
+@app.post("/api/user/logout")
+def user_logout(request: Request):
+    token = request.headers.get("authorization", "")[7:].strip()
+    with _lock:
+        sessions = _load_sessions()
+        sessions.pop(hashlib.sha256(token.encode()).hexdigest(), None)
+        _save_sessions(sessions)
+    return {"status": "ok"}
+
+
+def _delete_user_files(uid: int, email: str) -> dict:
+    """Remove exact namespaces; never remove a legacy path shared by aliases."""
+    from garmin_probe import tokenstore_path, per_user_dump_path
+    own_legacy = storage.legacy_paths(email)
+    others = {p for other in db.list_user_emails() if other != email
+              for p in storage.legacy_paths(other).values()}
+    storage.write_private_json(storage.deletion_marker(email), {"deleted_at": time.time()})
+    paths = {storage.user_dir(email), tokenstore_path(email), per_user_dump_path(email)}
+    skipped = []
+    for path in own_legacy.values():
+        if path in others:
+            skipped.append("ambiguous_legacy_path")
+        else:
+            paths.add(path)
+    if email == _default_email().strip().lower():
+        paths.update(PROJECT_ROOT / name for name in (
+            "garmin_raw_dump.json", "analytics_summary.json", "workout_plan.json", "coach_memory.json"))
+        paths.update(DATA_DIR / name for name in (
+            "athlete_state.json", "goals.json", "table_plan.json", "injuries.json"))
+        cfg = _load_config()
+        cfg["garmin"] = {}
+        storage.write_private_json(CONFIG_PATH, cfg)
+        env_file = PROJECT_ROOT / ".env"
+        if env_file.is_file() and not env_file.is_symlink():
+            lines = env_file.read_text().splitlines(keepends=True)
+            clean = [line for line in lines if not re.match(
+                r"^\s*(?:export\s+)?GARMIN_(?:EMAIL|PASSWORD)\s*=", line)]
+            env_file.write_text("".join(clean))
+            env_file.chmod(0o600)
+    ts = _user_ts_cache.pop(uid, None)
+    if ts and ts.parent.name.startswith("myptai_sync_"):
+        paths.add(ts.parent)
+    paths.update(storage.temporary_tokenstores(email))
+    for path in sorted(paths, key=lambda p: len(p.parts), reverse=True):
+        storage.remove_path(path)
+    for cache_name in ("_chat_histories", "_cal_recheck_ts"):
+        cache = globals().get(cache_name)
+        if isinstance(cache, dict):
+            cache.pop(uid, None)
+    return {"skipped": sorted(set(skipped))}
+
+
 @app.post("/api/user/delete-account")
 def user_delete_account(request: Request):
     """Diritto all'oblio (Art. 17 GDPR): elimina dal Database SQL TUTTI i dati
@@ -657,6 +974,7 @@ def user_delete_account(request: Request):
     revoca le sue sessioni su tutti i dispositivi."""
     email = getattr(request.state, "user_email", None)
     uid = getattr(request.state, "user_id", None)
+    cleanup = _delete_user_files(uid, email)
     rows = db.delete_user(uid) if uid else 0
     cipher = _get_cipher()  # fuori dal lock (evita self-deadlock su _lock)
     with _lock:  # revoca sessioni dell'utente (token non più risolvibili)
@@ -674,6 +992,7 @@ def user_delete_account(request: Request):
     return {
         "status": "ok",
         "deleted": [f"SQL cascade: {rows} righe"],
+        "cleanup": cleanup,
         "message": "Account e dati personali eliminati dal server (Art. 17 GDPR).",
     }
 
@@ -685,7 +1004,7 @@ def user_delete_account(request: Request):
 LEGAL_TEXTS = {
     "privacy": {
         "title": "Informativa Privacy (GDPR)",
-        "updated": "2026-08-16",
+        "updated": "2026-11-18",
         "sections": [
             {
                 "h": "1. Titolare e finalità del trattamento",
@@ -698,8 +1017,8 @@ LEGAL_TEXTS = {
                 "h": "2. Categorie di dati trattati (dati biometrici, Art. 9 GDPR)",
                 "paras": [
                     "Il servizio elabora dati biometrici e relativi alla salute (categoria speciale ai sensi dell'Art. 9 GDPR): frequenza cardiaca, HRV notturno e settimanale, Sleep Score, Body Battery, VO2max, passi e ritmi delle sessioni di corsa.",
-                    "I dati vengono estratti in modo automatizzato dal tuo account Garmin e analizzati in forma pseudonimizzata: l'AI generativa riceve esclusivamente una sintesi numerica compatta (score e indicatori), mai i dati grezzi.",
-                    "I dati non vengono in alcun caso ceduti, venduti o condivisi con terzi, né utilizzati per finalità di profilazione pubblicitaria.",
+                    "Dopo il consenso, il servizio acquisisce i dati Garmin necessari al coaching. Le funzioni AI inviano al provider configurato una selezione di metriche, obiettivi e informazioni pertinenti alla richiesta. Messaggi e note inseriti dall’utente possono contenere ulteriori dati personali.",
+                    "Il servizio usa Garmin Connect e il provider AI configurato per le funzioni richieste. I dati non sono destinati alla pubblicità o alla vendita.",
                 ],
             },
             {
@@ -711,14 +1030,14 @@ LEGAL_TEXTS = {
             {
                 "h": "4. Sicurezza dei dati",
                 "paras": [
-                    "I dati sono protetti con crittografia AES-256-GCM a riposo per token di sessione e dati sensibili, trasporto TLS/HTTPS (certificato valido), rate-limiting anti brute-force e accesso in sola lettura al tuo account Garmin tramite sessione autorizzata.",
-                    "Le credenziali Garmin non vengono mai salvate: l'accesso avviene via sessione token temporanea non reversibile a testo chiaro.",
+                    "I token di sessione MyPTAI e i token Garmin conservati nel database sono cifrati con AES-256-GCM. I dati biometrici in SQLite/JSON e le eventuali copie locali dei token Garmin non sono cifrati individualmente dall’app e sono protetti dai permessi del server. Le connessioni web usano HTTPS. La sincronizzazione degli allenamenti comporta scritture nel calendario Garmin richieste dall’utente.",
+                    "Le password del login web non vengono conservate in chiaro. Dopo la verifica, il servizio conserva un verificatore crittografico non reversibile, cifrato e associato al singolo account, con validità massima di 30 giorni. Le sessioni create usando tale verifica non possono superarne la scadenza. La configurazione privata del server può contenere credenziali dell’account principale per gli strumenti di amministrazione. I token Garmin sono credenziali riutilizzabili e devono essere protetti.",
                 ],
             },
             {
                 "h": "5. Conservazione e localizzazione",
                 "paras": [
-                    "I dati vengono conservati su un server dedicato (VPS) per il solo tempo necessario al servizio di coaching attivo, e per l'utente singolo. Alla cancellazione dell'account tutti i file personali vengono rimossi.",
+                    "I dati attivi sono conservati sulla VPS e separati per account. La cancellazione rimuove i record attivi e i file attribuibili all’account. Eventuali copie di sicurezza precedenti restano separate dai dati attivi e richiedono una gestione specifica della conservazione.",
                 ],
             },
             {
@@ -738,7 +1057,7 @@ LEGAL_TEXTS = {
     },
     "terms": {
         "title": "Termini di Servizio e Disclaimer Medico",
-        "updated": "2026-08-16",
+        "updated": "2026-11-18",
         "sections": [
             {
                 "h": "1. Oggetto del servizio",
@@ -778,7 +1097,7 @@ LEGAL_TEXTS = {
     },
     "cookies": {
         "title": "Cookie Policy",
-        "updated": "2026-08-16",
+        "updated": "2026-11-18",
         "sections": [
             {
                 "h": "1. Cosa sono i cookie",
@@ -790,7 +1109,7 @@ LEGAL_TEXTS = {
                 "h": "2. Cookie utilizzati da MyPT AI",
                 "paras": [
                     "MyPT AI NON utilizza cookie di profilazione, cookie pubblicitari o cookie di terze parti (nessun tracciamento cross-site, nessun pixel, nessun analytics di marketing).",
-                    "La sessione utente è gestita tramite un token tecnico conservato esclusivamente nel localStorage del browser (tecnologia analoga ai cookie tecnici ex Art. 122 Codice Privacy): serve solo a mantenere l'accesso e non viene condiviso con terzi.",
+                    "Il browser conserva il token tecnico in localStorage; il server conserva la sua impronta e un record cifrato. La sessione scade dopo 30 giorni o 7 giorni di inattività. L’uscita completata online revoca la sessione del dispositivo.",
                 ],
             },
             {
@@ -888,12 +1207,7 @@ def _read_json(path: Path, default):
 
 
 def _write_json(path: Path, data) -> None:
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(".tmp")
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2, ensure_ascii=False)
-    tmp.replace(path)
+    storage.write_private_json(path, data)
 
 
 # =============================================================================
@@ -912,11 +1226,17 @@ def _default_email() -> str:
 
 
 def _user_dir(email: Optional[str] = None) -> Path:
-    return USERS_DIR / _slug_email(email or _default_email())
+    return storage.user_dir(email or _default_email())
 
 
 def _user_file(email: Optional[str], name: str) -> Path:
-    return _user_dir(email) / name
+    email = email or _default_email()
+    if Path(name).name != name:
+        raise ValueError("Invalid user file name")
+    path = _user_dir(email) / name
+    old = storage.legacy_paths(email)
+    storage.migrate_owner_file(email, path, [old["web"] / name, DATA_DIR / name])
+    return path
 
 
 def _load_user_json(email: Optional[str], name: str, default):
@@ -924,7 +1244,7 @@ def _load_user_json(email: Optional[str], name: str, default):
     (root/data) così i dati esistenti non vanno persi alla migrazione."""
     email = email or _default_email()
     user_path = _user_file(email, name)
-    if not user_path.exists():
+    if not user_path.exists() and storage.may_migrate_owner(email):
         legacy = DATA_DIR / name
         if legacy.exists():
             try:
@@ -935,16 +1255,17 @@ def _load_user_json(email: Optional[str], name: str, default):
 
 
 def _write_user_json(email: Optional[str], name: str, data) -> None:
-    """Scrive il file per-utente + mirror legacy (compatibilità bot/CLI)."""
+    """Write only the requested account's namespace."""
     email = email or _default_email()
     _write_json(_user_file(email, name), data)
-    _write_json(DATA_DIR / name, data)
 
 
 def _user_id_for(email: Optional[str] = None) -> int:
     """user_id SQL per l'email dell'utente (crea l'utente se non esiste,
     es. primo accesso). I dati sono SEMPRE isolati per user_id."""
     email = ((email or _default_email()) or "").strip().lower()
+    if not email or "@" not in email:
+        raise HTTPException(status_code=401, detail="Account richiesto")
     user = db.get_user_by_email(email)
     if user:
         return int(user["id"])
@@ -1010,7 +1331,11 @@ def _migrate_legacy_to_sql() -> None:
     """Migrazione one-shot: copia i dati legacy (JSON per-utente del principale)
     nelle tabelle SQL alla prima esecuzione multi-utente. Idempotente."""
     email = _default_email()
-    if not email:
+    if not email or not storage.may_migrate_owner(email):
+        return
+    # Existing SQL accounts are authoritative. Re-importing an old summary on
+    # every new day can label yesterday's data as today's or resurrect clears.
+    if db.get_user_by_email(email.strip().lower()):
         return
     uid = _user_id_for(email)
     # obiettivo di gara
@@ -1030,8 +1355,13 @@ def _migrate_legacy_to_sql() -> None:
             db.save_workout_doc(uid, "table", t)
     # summary biometrico di oggi
     s = _read_json(_user_file(email, "analytics_summary.json"), None) or _read_json(SUMMARY_PATH, None)
-    if s and not db.get_biometric(uid):
-        db.save_biometric(uid, s)
+    if s:
+        try:
+            legacy_day = date.fromisoformat(s.get("garmin_data_date") or "").isoformat()
+        except (ValueError, TypeError):
+            legacy_day = None
+        if legacy_day and not db.get_biometric(uid, legacy_day):
+            db.save_biometric(uid, s, legacy_day)
     logger.info(f"migrazione legacy -> SQL completata per {email} (user_id={uid})")
 
 
@@ -1048,13 +1378,8 @@ def _decorate_workout(w: dict, readiness: dict = None) -> dict:
         if not isinstance(w.get("durata_reale_s"), (int, float)):
             from analytics_engine import workout_duration_with_recovery_s
             w["durata_reale_s"] = round(workout_duration_with_recovery_s(w), 1)
-    if readiness is None:
-        try:
-            readiness = _load_summary().get("readiness", {})
-        except Exception as err:  # noqa: BLE001
-            logger.warning(f"decorate: readiness non disponibile ({err})")
-            readiness = {}
-    if readiness.get("readiness_level") != "RED":
+    # A helper without an explicit user context must never consult the owner.
+    if readiness is not None and readiness.get("readiness_level") != "RED":
         w["note"] = _strip_override_lines(w.get("note"))
     return w
 
@@ -1153,7 +1478,7 @@ def _load_summary(email: Optional[str] = None) -> dict:
     email = ((email or _default_email()) or "").strip().lower()
     owner = (_default_email() or "").strip().lower()
     uid = _user_id_for(email)
-    if email == owner:
+    if email == owner and storage.may_migrate_owner(email):
         try:
             from analytics_engine import AnalyticsEngine
             return _decorate_summary(AnalyticsEngine().build_context(), email)
@@ -1166,6 +1491,8 @@ def _load_summary(email: Optional[str] = None) -> dict:
         dump_path = per_user_dump_path(email)
         if dump_path.exists():
             dump = AnalyticsEngine._load_json(dump_path)
+            if storage.canonical_email(dump.get("email")) != email:
+                raise ValueError("Dump identity mismatch")
             summary = AnalyticsEngine(dump=dump, email=email).build_context()
             db.save_biometric(uid, summary)
             return _decorate_summary(summary, email)
@@ -1183,8 +1510,8 @@ def _load_summary(email: Optional[str] = None) -> dict:
 def _merge_goal(summary: dict, email: Optional[str] = None) -> dict:
     """Inietta l'obiettivo di gara (se configurato) nel contesto per l'AI.
 
-    NON tocca la REGOLA SOGLIA: fc_soglia 176 / passo_soglia 4:44 restano i
-    valori ufficiali Garmin già presenti in summary['atleta'].
+    NON tocca la REGOLA SOGLIA: le soglie restano quelle ufficiali
+    già presenti in summary['atleta'].
     """
     goals = _load_goals(email)
     if not goals.get("enabled") or not goals.get("race_type"):
@@ -1207,8 +1534,8 @@ def _merge_goal(summary: dict, email: Optional[str] = None) -> dict:
         "note": (f"Obiettivo di gara: {rt} in {_fmt_clock(tgt)} "
                  f"(ritmo target ~{pace_display}). Il coach deve costruire "
                  "l'allenamento tenendo conto di questo obiettivo di gara "
-                 "senza alterare la FC soglia ufficiale Garmin (176 bpm) "
-                 "né il passo soglia (4:44/km)."),
+                 "senza alterare la FC e il passo di soglia ufficiali Garmin "
+                 "presenti nel contesto dell’atleta."),
     }
     if goals.get("race_date"):
         ctx["obiettivo_gara"]["note"] += f" Gara il {goals['race_date']}."
@@ -1760,7 +2087,7 @@ async def refresh_garmin_data(request: Request):
         from garmin_probe import run_probe, per_user_dump_path
         from analytics_engine import AnalyticsEngine
 
-        if (email or "").lower() == (owner or "").lower():
+        if (email or "").lower() == (owner or "").lower() and storage.may_migrate_owner(email):
             # Account principale: pipeline storica con credenziali config
             await asyncio.to_thread(run_probe)
             summary = await asyncio.to_thread(AnalyticsEngine().run)
@@ -1901,7 +2228,7 @@ def _workout_sync_for(email: Optional[str], uid: Optional[int]):
     permanente) e vengono riusati per la durata del processo."""
     from workout_sync import WorkoutSync
 
-    if (email or "").lower() == (_default_email() or "").lower():
+    if (email or "").lower() == (_default_email() or "").lower() and storage.may_migrate_owner(email):
         return WorkoutSync()
     tokens = db.get_user_tokens(uid) if uid else None
     if not tokens:
@@ -2877,6 +3204,11 @@ def get_goals(request: Request):
 @app.post("/api/goals")
 def set_goals(payload: GoalPayload, request: Request):
     email = getattr(request.state, "user_email", None)
+    if payload.race_date:
+        try:
+            date.fromisoformat(payload.race_date)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Data della gara non valida")
     with _lock:
         goals = _load_goals(email)
         goals["race_type"] = payload.race_type
@@ -3013,9 +3345,6 @@ async def generate_table(payload: TableGenerateRequest, request: Request):
     if any(d < 0 or d > 6 for d in days):
         raise HTTPException(status_code=400, detail="Giorni non validi (attesi 0-6, Lun=0...Dom=6)")
 
-    summary = _merge_goal(_load_summary(email), email)
-    coach = AICoach(summary=summary)
-
     # --- periodo --------------------------------------------------------------
     start = date.today()
     if payload.duration == "race":
@@ -3033,11 +3362,10 @@ async def generate_table(payload: TableGenerateRequest, request: Request):
     else:
         end = start + timedelta(days=TABLE_DURATION_DAYS[payload.duration] - 1)
 
-    all_dates: List[date] = []
-    d = start
-    while d <= end:
-        all_dates.append(d)
-        d += timedelta(days=1)
+    span = (end - start).days + 1
+    if span > MAX_TABLE_DAYS:
+        raise HTTPException(status_code=400, detail="Puoi generare al massimo 12 settimane alla volta.")
+    all_dates = [start + timedelta(days=i) for i in range(span)]
     training_dates = [d for d in all_dates if d.weekday() in days]
     if not training_dates:
         raise HTTPException(status_code=400, detail="Nessun giorno di allenamento nel periodo selezionato")
@@ -3048,6 +3376,14 @@ async def generate_table(payload: TableGenerateRequest, request: Request):
         key = td.isocalendar()[:2]  # (year, week)
         weeks.setdefault(key, []).append(td)
     week_keys = sorted(weeks.keys())
+    if len(week_keys) > MAX_TABLE_PROVIDER_CALLS:
+        raise HTTPException(status_code=400, detail="Periodo di allenamento troppo lungo")
+    ok, retry = _table_limiter.allow(str(request.state.user_id))
+    if not ok:
+        return _too_many(retry, "Limite giornaliero di generazione tabelle raggiunto")
+    summary = _merge_goal(_load_summary(email), email)
+    coach = AICoach(summary=summary)
+    coach.provider_budget = {"calls": 26, "tokens": 320000}
 
     goals = _load_goals(email)
     goal_note = ""
@@ -3304,14 +3640,13 @@ WORKOUT_INTENT_RE = re.compile(
 )
 
 CHAT_SYSTEM_PROMPT = (
-    "Sei il Coach MyPT AI di Riccardo (coach personale di corsa basato sui dati reali Garmin, 23 anni, FC max 200, "
-    "FC soglia 176 bpm, passo soglia 4:44/km, VO2max 54.5)."
+    "Sei il Coach MyPT AI, coach personale di corsa basato sui dati Garmin dell'atleta."
     "\nREGOLE:"
-    "\n1. Rispondi SOLO ed esclusivamente in base ai DATI REALI forniti nel messaggio utente. Non inventare numeri."
-    "\n2. FC soglia (176 bpm) e passo soglia (4:44/km) sono valori UFFICIALI Garmin SEMPRE FISSI: non alterarli."
-    "\n3. Rispondi in italiano, conciso e diretto (max 4-6 righe), come un coach su WhatsApp."
-    "\n4. Se l'utente chiede consigli su infortuni/fastidi, dai indicazioni prudenti e suggerisci di ridurre il carico."
-    "\n5. Se l'utente chiede un allenamento strutturato, usa il JSON dell'allenamento (strumento dedicato)."
+    "\n1. Rispondi esclusivamente in base ai dati reali forniti nel contesto. Non inventare numeri."
+    "\n2. Usa le soglie ufficiali Garmin presenti nel contesto, senza modificarle localmente."
+    "\n3. Rispondi in italiano, conciso e diretto (max 4-6 righe)."
+    "\n4. Per infortuni o fastidi, dai indicazioni prudenti e suggerisci di ridurre il carico."
+    "\n5. Per un allenamento strutturato usa lo strumento dedicato e il suo schema JSON."
 )
 
 # Storico conversazione in memoria, ISOLATO per user_id
@@ -3327,7 +3662,8 @@ def _generic_chat(config: dict, summary: dict, user_msg: str, history: List[dict
     ds = config.get("deepseek", {})
     messages = [{"role": "system", "content": CHAT_SYSTEM_PROMPT}]
     messages += history[-8:]
-    compact = json.dumps(summary, ensure_ascii=False, default=str)
+    from ai_coach import AICoach
+    compact = AICoach(config=config, summary=summary).build_compact_context()
     messages.append({
         "role": "user",
         "content": f"DATI REALI DELL'ATLETA (unica fonte di verità):\n{compact}\n\n"

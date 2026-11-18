@@ -7,9 +7,9 @@ Elaborazione algebrica dei dati Garmin grezzi (garmin_raw_dump.json) per:
 1. READINESS SCORE (0-100): combinazione pesata di HRV notturno, Sleep Score,
    Body Battery e stress notturno, con aggiustamento RHR.
 2. CLASSIFICAZIONE LAP: separa il ritmo Z2/Z3 (corse lente) da Z1/Z2 (recuperi)
-   e da Z4+ (ripetute/soglia) usando le zone cardio di Riccardo da config.json.
-3. TRACKING PROGRESSI: FC Max (200), FC Soglia (176), Passo Soglia (4:44),
-   VO2Max (54.5) - confronto baseline config vs valori osservati reali.
+   e da Z4+ (ripetute/soglia) usando le zone cardio dell’atleta da config.json.
+3. TRACKING PROGRESSI: confronto tra i riferimenti privati dell’atleta
+   e i valori ufficiali osservati su Garmin.
 4. CONTESTO COMPATTO per DeepSeek: sintesi numerica JSON, senza testo libero
    (risparmio token + zero allucinazioni: solo dati reali).
 
@@ -34,9 +34,9 @@ READINESS_MIN_COVERAGE = 0.50
 RHR_MIN_DAYS = 14
 
 # ---------------------------------------------------------------------------
-# MAPPATURA ESATTA ZONE GARMIN DI RICCARDO (da AGENTS.md / screenshot Garmin):
-#   1) Corsa Lenta / Main Easy Run  -> Garmin ZONA 3 (142-158 bpm)
-#   2) Soglia / Ripetute            -> Garmin ZONA 4 (FC Soglia / Passo Soglia live)
+# MAPPATURA ESATTA ZONE GARMIN DELL’ATLETA (da AGENTS.md / screenshot Garmin):
+#   1) Corsa Lenta / Main Easy Run  -> Garmin ZONA 3 (fascia personale)
+#   2) Soglia / Ripetute            -> Garmin ZONA 4 (soglie ufficiali personali)
 #   3) Massimale / Sprint           -> Garmin ZONA 5 (FC Max live)
 #   4) Recupero / Defaticamento     -> Garmin ZONA 1 o ZONA 2 (zone live)
 # Usata per interpretare i lap e per istruire l'AI sui target di zona.
@@ -110,7 +110,7 @@ def workout_duration_with_recovery_s(workout) -> float:
 
 
 def pace_to_display(sec_km):
-    """284 -> '4:44'."""
+    """300 -> '5:00' (esempio sintetico)."""
     if not sec_km or sec_km <= 0:
         return "n/a"
     m, s = divmod(int(round(sec_km)), 60)
@@ -144,10 +144,12 @@ def overpacing_tolerance_sec_km(dist_m, dur_s):
 
 class AnalyticsEngine:
     def __init__(self, config: dict = None, dump: dict = None, email: str = None):
-        self.config = config or self._load_json(CONFIG_PATH)
-        self.dump = dump or self._load_json(DUMP_PATH)
-        self.athlete = dict(self.config.get("athlete", {}))
+        self.config = config if config is not None else self._load_json(CONFIG_PATH)
+        self.dump = dump if dump is not None else self._load_json(DUMP_PATH)
         self._user_email = (email or self.dump.get("email") or "").strip().lower()
+        cfg_email = ((self.config.get("garmin") or {}).get("email") or "").strip().lower()
+        self._is_owner = bool(self._user_email) and self._user_email == cfg_email
+        self.athlete = dict(self.config.get("athlete", {})) if self._is_owner else {}
         # Nome reale dell'utente dal dump (full_name / email): MAI hardcoded
         full_name = (((self.dump.get("endpoints") or {}).get("full_name") or {})
                      .get("data") or "").strip()
@@ -155,8 +157,6 @@ class AnalyticsEngine:
             self.athlete["name"] = full_name
         elif not self.athlete.get("name") and self._user_email:
             self.athlete["name"] = self._user_email
-        cfg_email = ((self.config.get("garmin") or {}).get("email") or "").strip().lower()
-        self._is_owner = bool(self._user_email) and self._user_email == cfg_email
         self.zones = self.athlete.get("heart_rate_zones", {})
         self.eps = self.dump.get("endpoints", {})
         self._derive_thresholds()
@@ -165,7 +165,7 @@ class AnalyticsEngine:
     def _profile_from_dump(self) -> None:
         """Profilo anagrafico reale dal dump per gli account secondari
         (user_settings.userData): eta (birthDate), peso (g -> kg), altezza,
-        FC Max (top Z5 derivata) e VO2max baseline — MAI quelli di Riccardo."""
+        FC Max (top Z5 derivata) e VO2max baseline — MAI quelli dell’atleta."""
         if self._is_owner:
             return
         us = (self._ep("user_settings") or {}).get("userData") or {}
@@ -239,7 +239,7 @@ class AnalyticsEngine:
            utente, MAI costanti cablate nel codice);
         3) Account secondari -> fallback fisiologico VDOT dal VO2max reale
            (poi stima da race_predictions); MAI i valori di un altro utente.
-        v87: NESSUN valore fisso hardcoded (rimossi 176 bpm / 284 s/km)."""
+        Usa le soglie del singolo atleta, senza riferimenti personali nel codice."""
         us_lthr, us_pace = self._thresholds_from_user_settings()
         if us_lthr:
             self.lthr = us_lthr
@@ -653,11 +653,8 @@ class AnalyticsEngine:
     def classify_lap(self, lap: dict) -> dict:
         """Classifica un singolo lap in ZONE/INTENSITY basato su HR + ritmo.
 
-        Regole (basate sulle zone Garmin reali di Riccardo, ritmo come conferma):
-        - Z1 (HR<124) o ritmo >7:00/km con HR basso -> RECOVERY_Z1 (recupero camminato)
-        - Z2 (124-141)                               -> EASY_Z2 (corsa facile/recovery)
-        - Z3 (142-158)                               -> EASY_Z3 (corsa lenta: zona abituale di Riccardo)
-        - Z4+ (>=159) o ritmo <=4:20/km              -> REPEAT_THRESHOLD (ripetuta/soglia)
+        Usa le zone e i passi del singolo atleta; le etichette descrivono
+        recupero, corsa facile e lavoro di soglia.
         """
         avg_speed = lap.get("averageSpeed")  # m/s
         distance = lap.get("distance", 0)    # metri
@@ -674,11 +671,14 @@ class AnalyticsEngine:
         zone = self._zone_from_hr(avg_hr)
         lthr = self.lthr
 
-        # Soglie HR dinamiche per-utente: owner = valori ufficiali Garmin
-        # (124/142/159 bpm da config), account secondari = %% della FC Soglia
-        # stimata; se non derivabili (None) la classificazione usa solo il passo.
-        if self._is_owner:
-            z2_lo, z3_lo, z4_lo = 124, 142, 159
+        # Riferimenti personali da configurazione privata, altrimenti stima
+        # dalla soglia dell’account corrente; nessun valore owner nel codice.
+        boundaries = self.athlete.get("lap_hr_boundaries_bpm")
+        valid_boundaries = (isinstance(boundaries, (list, tuple)) and len(boundaries) == 3
+                            and all(_garmin_number(value, minimum=1, maximum=300) is not None for value in boundaries)
+                            and boundaries[0] < boundaries[1] < boundaries[2])
+        if valid_boundaries:
+            z2_lo, z3_lo, z4_lo = boundaries
         elif lthr:
             z2_lo, z3_lo, z4_lo = round(lthr * 0.70), round(lthr * 0.81), round(lthr * 0.90)
         else:
@@ -736,7 +736,7 @@ class AnalyticsEngine:
         avg_hr = [c["avg_hr"] for c in classified if c["avg_hr"]]
         pace_list = [c["pace_sec_km"] for c in classified if c["pace_sec_km"]]
 
-        # Tipo di sessione dominante (mappatura esatta zone Riccardo)
+        # Tipo di sessione dominante (mappatura esatta zone dell’atleta)
         n_repeat = counts.get("REPEAT_THRESHOLD", 0)
         n_z2 = counts.get("EASY_Z2", 0)
         n_z3 = counts.get("EASY_Z3", 0)
@@ -839,9 +839,9 @@ class AnalyticsEngine:
 
         return {
             "fc_max": {"baseline": self.athlete.get("max_hr"), "osservata": fc_max_obs,
-                       "delta": (fc_max_obs - self.athlete.get("max_hr")) if fc_max_obs else None},
+                       "delta": (fc_max_obs - self.athlete.get("max_hr")) if fc_max_obs and self.athlete.get("max_hr") else None},
             "fc_soglia": {"baseline": self.lthr, "stimata_da_lap_z4": fc_soglia_est,
-                          "delta": (fc_soglia_est - self.lthr) if fc_soglia_est else None},
+                          "delta": (fc_soglia_est - self.lthr) if fc_soglia_est and self.lthr else None},
             "passo_soglia": {"baseline_sec_km": self.threshold_pace,
                              "baseline_display": self.athlete.get("threshold_pace_display"),
                              "stimato_da_hm_sec_km": round(hm_pace, 1) if hm_pace else None,
@@ -897,7 +897,7 @@ class AnalyticsEngine:
         readiness = self.compute_readiness()
         running = self.analyze_recent_running()
         # FC Soglia dinamica per gli account secondari: 90%% della FC Max reale
-        # osservata nei lap delle attivita (mai il valore cablato di Riccardo)
+        # osservata nei lap delle attivita (mai il valore cablato dell’atleta)
         if not self._is_owner and self.lthr is None:
             fc_max_obs = max((a.get("max_hr") for a in running if a.get("max_hr")), default=None)
             if fc_max_obs:
@@ -928,7 +928,7 @@ class AnalyticsEngine:
         )
         epoc_acuto, epoc_cronico, acwr = self._training_load(status_device)
 
-        # ---- Prompt dinamico per-utente (zero fallback cablati su Riccardo) ----
+        # ---- Prompt dinamico per-utente (zero fallback cablati sul proprietario) ----
         nome = self.athlete.get("name") or "atleta"
         z = self._zones_for_athlete()
         z3, z4, z5 = z.get("z3_tempo", {}), z.get("z4_threshold", {}), z.get("z5_vo2max", {})

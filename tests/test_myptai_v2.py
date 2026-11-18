@@ -44,7 +44,8 @@ class TestMyPTAI2Architecture(unittest.TestCase):
         # Regola 1: Riposo totale
         summary_danger = {
             "biometria": {"hrv_status": "LOW", "body_battery_attuale": 20, "rhr": 60, "sleep_score": 40},
-            "readiness": {"readiness_level": "RED", "readiness_score": 25},
+            "readiness": {"readiness_level": "RED", "readiness_score": 25,
+                          "rhr_reference": {"baseline_bpm": 50}},
             "atleta": {"fc_riposo_baseline": 50}
         }
         dec1 = AnalyticsEngine.evaluate_decision_engine(summary_danger)

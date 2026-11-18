@@ -9,7 +9,7 @@ const $ = (sel) => document.querySelector(sel);
 
 /* ============================ SESSIONE UTENTE (Garmin) ============================ */
 // La sessione (token + email Garmin) resta salvata sul dispositivo: l'utente
-// resta collegato per sempre. PC e cellulare con le stesse credenziali Garmin
+// resta collegato fino a scadenza o revoca. PC e cellulare con le stesse credenziali Garmin
 // condividono gli stessi dati (infortuni, obiettivi, tabelle, allenamenti).
 const SESSION_STORE = "myptai_session";
 // Sottotitolo ufficiale dell'onboarding (copy marketing MyPTAI)
@@ -98,21 +98,57 @@ function switchAccount(email) {
   SESSION = { token: acc.token, user_email: acc.email };
   localStorage.setItem(SESSION_STORE, JSON.stringify(SESSION));
   CURRENT_USER_EMAIL = acc.email;
-  resetReadiness();
+  clearPrivateView();
   closeAccountModal();
   toast("🔄 Account attivo: " + (acc.display_name || acc.email), 2600);
-  refreshAllData();
+  window.location.reload();
 }
-function logout() {
+async function purgePrivateCaches() {
+  if (!("caches" in window)) return;
+  await Promise.all((await caches.keys()).map(async (name) => {
+    if (!name.startsWith("garmin-coach-")) return;
+    const cache = await caches.open(name);
+    await Promise.all((await cache.keys()).filter((req) => new URL(req.url).pathname.startsWith("/api/"))
+      .map((req) => cache.delete(req)));
+  }));
+}
+function clearPrivateView() {
+  _lastSummary = null;
+  resetReadiness();
+  injuries = [];
+  tableData = null;
+  pendingOverride = null;
+  for (const id of ["chat-log", "injuries-list", "workout-result", "table-entries", "goal-result"]) {
+    const el = document.getElementById(id);
+    if (el) el.textContent = "";
+  }
+  for (const id of ["goal-h", "goal-m", "goal-s", "goal-date", "chat-input", "workout-request"]) {
+    const el = document.getElementById(id);
+    if (el) el.value = "";
+  }
+  document.getElementById("table-plan")?.classList.add("hidden");
+  purgePrivateCaches().catch(() => {});
+}
+function forgetActiveAccount() {
   // Pulisce il token di sessione attuale e rimuove l'account dalla lista salvata
   const email = activeAccountEmail();
   if (email) saveAccounts(loadAccounts().filter((a) => a.email !== email));
   localStorage.removeItem(SESSION_STORE);
   SESSION = null;
   CURRENT_USER_EMAIL = null;
-  resetReadiness();
+  clearPrivateView();
   closeAccountModal();
   showLogin();
+  window.location.reload();
+}
+async function logout() {
+  try {
+    await api("/api/user/logout", { method: "POST" });
+    forgetActiveAccount();
+  } catch (err) {
+    if (!SESSION) { forgetActiveAccount(); return; }
+    toast("Impossibile completare l'uscita dal server. Controlla la connessione e riprova.");
+  }
 }
 $("#garmin-badge-btn").addEventListener("click", openAccountModal);
 $("#garmin-badge-btn").addEventListener("keydown", (e) => {
@@ -152,7 +188,7 @@ $("#login-btn").addEventListener("click", async () => {
   if (!email || !pass) { showLogin("❌ Inserisci email e password Garmin"); return; }
   const btn = $("#login-btn");
   btn.disabled = true;
-  btn.textContent = "⏳ Connessione a Garmin...";
+  btn.textContent = "⏳ Accesso in corso...";
   try {
     // /api/auth è l'endpoint pubblico di onboarding (non richiede token)
     const res = await fetch("/api/auth", {
@@ -167,20 +203,21 @@ $("#login-btn").addEventListener("click", async () => {
         startLockCountdown(data.retry_after_s || 900);
         return;
       }
+      if (res.status === 503 && data.retry_after_s) {
+        startLockCountdown(data.retry_after_s, (data.detail || "Accesso temporaneamente non disponibile.") + " Attendi ");
+        return;
+      }
       throw new Error((data && data.detail) || "Credenziali non valide");
     }
     clearLockTimer();
     SESSION = { token: data.token, user_email: data.user_email };
+    clearPrivateView();
     localStorage.setItem(SESSION_STORE, JSON.stringify(SESSION));
     CURRENT_USER_EMAIL = data.user_email;
     // Multi-account: salva l'account sul dispositivo (nome reale al primo loadReadiness)
     rememberAccount(data.user_email, data.token);
-    btn.disabled = false;
-    btn.textContent = "🚀 Inizia Coaching";
-    hideLogin();
-    toast("✅ Benvenuto " + (data.user_email || "") + " — sincronizzazione in corso...", 3200);
-    // GDPR: prima di procedere verifica il consenso al trattamento dei dati
-    checkConsentAndStart();
+    window.location.reload();
+    return;
   } catch (err) {
     btn.disabled = false;
     btn.textContent = "🚀 Inizia Coaching";
@@ -195,7 +232,7 @@ let _lockTimer = null;
 function clearLockTimer() {
   if (_lockTimer) { clearInterval(_lockTimer); _lockTimer = null; }
 }
-function startLockCountdown(seconds) {
+function startLockCountdown(seconds, message = "⏳ Troppi tentativi errati. Riprova tra ") {
   clearLockTimer();
   const btn = $("#login-btn");
   const err = $("#login-err");
@@ -205,7 +242,7 @@ function startLockCountdown(seconds) {
     const s = Math.max(0, Math.round((end - Date.now()) / 1000));
     const mm = String(Math.floor(s / 60)).padStart(2, "0");
     const ss = String(s % 60).padStart(2, "0");
-    showLogin("⏳ Troppi tentativi errati. Riprova tra " + mm + "m " + ss + "s");
+    showLogin(message + mm + "m " + ss + "s");
     if (s > 0) {
       btn.disabled = true;
       btn.textContent = "🔒 " + mm + "m " + ss + "s";
@@ -315,8 +352,9 @@ $("#delete-confirm").addEventListener("click", async () => {
   btn.textContent = "⏳ Eliminazione in corso...";
   try {
     await api("/api/user/delete-account", { method: "POST", body: JSON.stringify({}) });
-    localStorage.removeItem(SESSION_STORE);
-    SESSION = null;
+    const email = activeAccountEmail();
+    if (email) localStorage.removeItem("myptai_sync_done_" + email + "_v55");
+    forgetActiveAccount();
     $("#delete-modal").classList.add("hidden");
     toast("🗑️ Account e dati eliminati (Art. 17 GDPR)");
     showLogin();
@@ -488,17 +526,19 @@ async function api(path, opts = {}) {
   const headers = { ...(opts.headers || {}), "Content-Type": "application/json" };
   const token = SESSION?.token;
   if (token) headers["Authorization"] = "Bearer " + token;
-  const res = await fetch(path, { ...opts, headers });
+  const res = await fetch(path, { ...opts, headers, cache: "no-store" });
+  if (token !== SESSION?.token) throw new Error("Account cambiato durante la richiesta");
   if (res.status === 401) {
     if (token === SESSION?.token) {
-      localStorage.removeItem(SESSION_STORE);
-      SESSION = null;
+      forgetActiveAccount();
       showLogin("🔒 Sessione non valida: accedi di nuovo con le credenziali Garmin");
     }
     throw new Error("Sessione non valida");
   }
   let data = null;
   try { data = await res.json(); } catch { /* no body */ }
+  if (token !== SESSION?.token) throw new Error("Account cambiato durante la richiesta");
+  if (res.status === 403 && data?.detail === "consent_required") showPrivacyModal();
   if (!res.ok) {
     // FastAPI può restituire detail come oggetto/array (es. 422): evita "[object Object]"
     let msg = `Errore HTTP ${res.status}`;
@@ -941,11 +981,26 @@ function showReadinessFeedback(message, status = "") {
   feedback.dataset.status = status;
 }
 
+function renderGoalMetrics(d) {
+  const threshold = d.garmin_official_threshold || {};
+  const values = {
+    "#goal-threshold-hr": metricValue(threshold.heart_rate),
+    "#goal-threshold-pace": Number.isFinite(threshold.pace_sec_per_km) ? fmtPace(Math.round(threshold.pace_sec_per_km)) : "—",
+    "#goal-max-hr": metricValue(d.atleta?.fc_max),
+    "#goal-vo2max": metricValue(d.garmin_vo2max),
+  };
+  for (const [selector, value] of Object.entries(values)) {
+    const element = $(selector);
+    if (element) element.textContent = value;
+  }
+}
+
 function resetReadiness() {
   _lastSummary = null;
   CURRENT_READINESS_LEVEL = null;
   setPill(null, null);
   renderReadinessOverview({});
+  renderGoalMetrics({});
   renderMetricsGrid({});
   renderKarvonenAndACWR({});
   renderRecent([]);
@@ -980,9 +1035,7 @@ async function loadReadiness() {
       <div><dt>VO₂max</dt><dd>${metricValue(d.garmin_vo2max)}</dd></div>
       <div><dt>FC soglia</dt><dd>${metricValue(officialThreshold.heart_rate, " bpm")}</dd></div>
       <div><dt>Passo soglia</dt><dd>${Number.isFinite(pace) ? fmtPace(Math.round(pace)) : "—"}</dd></div>`;
-    const vo2Val = d.progressi?.vo2max?.attuale;
-    const goalVo2 = $("#goal-vo2max");
-    if (goalVo2) goalVo2.textContent = vo2Val != null ? vo2Val : "—";
+    renderGoalMetrics(d);
     renderHomeWorkoutCard();
     return d;
   } catch (err) {
@@ -1918,8 +1971,8 @@ async function init() {
   buildBodyCards();
   if (!SESSION || !SESSION.token) { showLogin(); return; }
   try {
-    const h = await api("/api/health");
-    if (!h || h.status !== "ok") throw new Error("health");
+    const me = await api("/api/user/me");
+    if (!me || !me.email) throw new Error("session");
     hideLogin();
     checkConsentAndStart();
   } catch {
@@ -1932,7 +1985,7 @@ async function init() {
 /* ============================ SERVICE WORKER ============================ */
 if ("serviceWorker" in navigator) {
   window.addEventListener("load", () => {
-    navigator.serviceWorker.register("/sw.js").catch((err) => {
+    navigator.serviceWorker.register("/sw.js", { updateViaCache: "none" }).then((registration) => registration.update()).catch((err) => {
       console.warn("SW registration failed:", err);
     });
   });

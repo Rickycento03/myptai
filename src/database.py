@@ -60,6 +60,12 @@ CREATE TABLE IF NOT EXISTS user_biometrics (
   FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 );
 
+CREATE TABLE IF NOT EXISTS user_login_verifiers (
+  user_id INTEGER PRIMARY KEY,
+  verifier_enc BLOB NOT NULL,
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
 CREATE TABLE IF NOT EXISTS user_workouts (
   id TEXT PRIMARY KEY,
   user_id INTEGER NOT NULL,
@@ -174,6 +180,15 @@ def get_user(user_id: int) -> Optional[dict]:
             conn.close()
 
 
+def list_user_emails() -> list:
+    with _lock:
+        conn = _connect()
+        try:
+            return [row[0] for row in conn.execute("SELECT email FROM users")]
+        finally:
+            conn.close()
+
+
 def set_user_tokens(user_id: int, tokens_enc: bytes) -> None:
     with _lock:
         conn = _connect()
@@ -202,6 +217,28 @@ def set_user_consent(user_id: int, version: str, accepted: bool) -> None:
                 "UPDATE users SET consent_version = ?, consent_accepted = ? WHERE id = ?",
                 (version, 1 if accepted else 0, user_id),
             )
+            conn.commit()
+        finally:
+            conn.close()
+
+
+def get_login_verifier(user_id: int) -> Optional[bytes]:
+    with _lock:
+        conn = _connect()
+        try:
+            row = conn.execute("SELECT verifier_enc FROM user_login_verifiers WHERE user_id=?", (user_id,)).fetchone()
+            return bytes(row[0]) if row else None
+        finally:
+            conn.close()
+
+
+def set_login_verifier(user_id: int, verifier_enc: bytes) -> None:
+    with _lock:
+        conn = _connect()
+        try:
+            conn.execute("INSERT INTO user_login_verifiers(user_id,verifier_enc) VALUES(?,?) "
+                         "ON CONFLICT(user_id) DO UPDATE SET verifier_enc=excluded.verifier_enc",
+                         (user_id, verifier_enc))
             conn.commit()
         finally:
             conn.close()

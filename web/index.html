@@ -168,9 +168,9 @@
         <button id="btn-goal-save" class="btn btn-primary btn-block">💾 Salva obiettivo</button>
         <div id="goal-result" class="goal-result"></div>
         <div class="threshold-grid">
-          <div class="th-item"><span class="th-val">176</span><span class="th-lab">FC soglia (bpm)</span></div>
-          <div class="th-item"><span class="th-val">4:44</span><span class="th-lab">Passo soglia (/km)</span></div>
-          <div class="th-item"><span class="th-val">200</span><span class="th-lab">FC max (bpm)</span></div>
+          <div class="th-item"><span class="th-val" id="goal-threshold-hr">—</span><span class="th-lab">FC soglia (bpm)</span></div>
+          <div class="th-item"><span class="th-val" id="goal-threshold-pace">—</span><span class="th-lab">Passo soglia (/km)</span></div>
+          <div class="th-item"><span class="th-val" id="goal-max-hr">—</span><span class="th-lab">FC max (bpm)</span></div>
           <div class="th-item"><span class="th-val" id="goal-vo2max">—</span><span class="th-lab">VO₂max</span></div>
         </div>
       </div>
@@ -414,6 +414,6 @@
 
   <div id="toast" class="toast hidden"></div>
 
-  <script src="/js/app.js?v=97"></script>
+  <script src="/js/app.js?v=101"></script>
 </body>
 </html>

@@ -2,7 +2,7 @@
 """
 garmin_probe.py - FASE 1: Data Discovery Garmin Connect
 =======================================================
-Autentica con Garmin Connect (account Riccardo) ed estrae i dati grezzi da tutti
+Autentica con Garmin Connect (account configurato) ed estrae i dati grezzi da tutti
 gli endpoint disponibili: Profilo, Sleep, HRV, Body Battery, Training Status,
 Readiness, Max Metrics, RHR, Race Predictions, Endurance Score, Attività e Laps.
 
@@ -15,6 +15,7 @@ import sys
 import tempfile
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
+from user_storage import account_key, private_dir, bind_tokenstore, tokenstore_is_bound
 
 # --- Configurazione -----------------------------------------------------------
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -46,18 +47,14 @@ def load_credentials() -> dict:
 
 
 def tokenstore_path(email: str) -> Path:
-    """Percorso del tokenstore persistente per l'account (evita re-login)."""
-    clean = email.lower().replace("@", "_").replace(".", "_")
-    ts = os.getenv("GARMIN_TOKENSTORE") or os.path.expanduser(
-        f"~/.garminconnect_session_{clean}"
-    )
-    return Path(ts)
+    """Explicit per-account namespace; environment cannot redirect another user."""
+    return PROJECT_ROOT / "data" / "users" / account_key(email) / "garmin_session"
 
 
 def authenticate(client: "Garmin", email: str, password: str) -> bool:
     """Login con tokenstore se disponibile, altrimenti login diretto + salvataggio."""
     ts = tokenstore_path(email)
-    if ts.exists():
+    if tokenstore_is_bound(ts, email):
         print(f"  ➜ Login tramite tokenstore salvato ({ts})...")
         try:
             client.login(ts)
@@ -68,9 +65,10 @@ def authenticate(client: "Garmin", email: str, password: str) -> bool:
     else:
         print(f"  ℹ️ Nessun tokenstore in {ts}, procedo con login diretto...")
 
-    client.login()
+    with tempfile.TemporaryDirectory(prefix="myptai_fresh_") as isolated:
+        client.login(isolated)
     try:
-        ts.parent.mkdir(parents=True, exist_ok=True)
+        private_dir(ts)
         inner = getattr(client, "client", None)
         if inner is not None and hasattr(inner, "dump"):
             inner.dump(ts)
@@ -78,14 +76,15 @@ def authenticate(client: "Garmin", email: str, password: str) -> bool:
             client.garth.dump(ts)
         else:
             raise RuntimeError("nessun metodo di dump disponibile")
-        print(f"  💾 Sessione salvata in {ts}")
+        bind_tokenstore(ts, email)
+        print("  💾 Sessione salvata nello spazio privato dell'account")
     except Exception as err:  # noqa: BLE001
         print(f"  (Nota salvataggio sessione: {err})")
     print("✅ Autenticazione diretta riuscita!")
     return True
 
 
-def build_client(email: str, password: str, tokenstore: str = None) -> "Garmin":
+def build_client(email: str, password: str, tokenstore: str = None, *, require_password: bool = False) -> "Garmin":
     """Autentica con Garmin per QUALSIASI account (multi-utente):
     1) tokenstore se disponibile e valido (login senza password);
     2) altrimenti login diretto con email+password (SSO Garmin).
@@ -95,8 +94,18 @@ def build_client(email: str, password: str, tokenstore: str = None) -> "Garmin":
     from garminconnect import Garmin
 
     client = Garmin(email, password)
+    if require_password:
+        if not password:
+            raise ValueError("Password required for a new login")
+        # A nonempty, empty temporary directory overrides GARMINTOKENS inside
+        # Garmin.login(). No DB, permanent or environment tokens prove identity.
+        with tempfile.TemporaryDirectory(prefix="myptai_fresh_") as isolated:
+            result = client.login(isolated)
+        if isinstance(result, tuple) and result and result[0]:
+            raise RuntimeError("Garmin login requires MFA completion")
+        return client
     ts = Path(tokenstore) if tokenstore else tokenstore_path(email)
-    if ts.exists():
+    if tokenstore_is_bound(ts, email):
         try:
             client.login(str(ts))
             return client
@@ -106,12 +115,15 @@ def build_client(email: str, password: str, tokenstore: str = None) -> "Garmin":
             print(f"  ⚠️ Tokenstore non valido ({err}), login diretto...")
     if not password:
         raise RuntimeError("Sessione Garmin non disponibile: accedi di nuovo.")
-    client.login()  # può sollevare per credenziali errate / rete
+    # An invalid/mismatched store must not contaminate a fresh credential login.
+    client = Garmin(email, password)
+    with tempfile.TemporaryDirectory(prefix="myptai_fresh_") as isolated:
+        client.login(isolated)
     try:
         # Salvataggio tokenstore nel formato della libreria installata:
         # garminconnect >= 0.3 -> client.client.dump (garmin_tokens.json);
         # versioni garth legacy -> client.garth.dump (oauth1/oauth2).
-        ts.parent.mkdir(parents=True, exist_ok=True)
+        private_dir(ts)
         inner = getattr(client, "client", None)
         if inner is not None and hasattr(inner, "dump"):
             inner.dump(str(ts))
@@ -119,15 +131,15 @@ def build_client(email: str, password: str, tokenstore: str = None) -> "Garmin":
             client.garth.dump(str(ts))
         else:
             raise RuntimeError("nessun metodo di dump disponibile")
+        bind_tokenstore(ts, email)
     except Exception as err:  # noqa: BLE001
         print(f"  (Nota salvataggio sessione: {err})")
     return client
 
 
 def per_user_dump_path(email: str) -> Path:
-    """Dump grezzo per-utente: data/dumps/{slug}.json (multi-utente)."""
-    clean = email.lower().replace("@", "_").replace(".", "_")
-    return PROJECT_ROOT / "data" / "dumps" / f"garmin_raw_dump_{clean}.json"
+    """Dump name cannot collide across distinct canonical account identities."""
+    return PROJECT_ROOT / "data" / "dumps" / f"garmin_raw_dump_{account_key(email)}.json"
 
 
 
